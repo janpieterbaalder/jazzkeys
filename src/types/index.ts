@@ -14,6 +14,7 @@ export interface Lesson {
   description: string;
   order: number;
   sections: LessonSection[];
+  useCircleOfFifths?: boolean;
 }
 
 export interface LessonSection {
