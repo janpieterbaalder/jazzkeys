@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import PdfUploader from "@/components/analyse/PdfUploader";
 import ChordInput from "@/components/analyse/ChordInput";
 import StukjeView from "@/components/analyse/StukjeView";
@@ -8,6 +8,14 @@ import AkkoordResult from "@/components/analyse/AkkoordResult";
 import type { PdfAnalyseResult, AkkoordAnalyseResult } from "@/lib/claude";
 
 type AnalyseMode = "idle" | "loading" | "pdf-result" | "chord-result" | "error";
+
+interface SavedAnalyse {
+  id: string;
+  titel: string;
+  type: "pdf" | "akkoorden";
+  invoer: string | null;
+  createdAt: string;
+}
 
 export default function AnalysePage() {
   const [mode, setMode] = useState<AnalyseMode>("idle");
@@ -17,6 +25,27 @@ export default function AnalysePage() {
   );
   const [selectedFragment, setSelectedFragment] = useState(0);
   const [error, setError] = useState("");
+  const [savedAnalyses, setSavedAnalyses] = useState<SavedAnalyse[]>([]);
+  const [loadingSaved, setLoadingSaved] = useState(false);
+
+  // Eerdere analyses ophalen bij laden
+  useEffect(() => {
+    fetch("/api/analyses")
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data)) setSavedAnalyses(data);
+      })
+      .catch(() => {});
+  }, []);
+
+  const refreshSaved = () => {
+    fetch("/api/analyses")
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data)) setSavedAnalyses(data);
+      })
+      .catch(() => {});
+  };
 
   const handlePdfUpload = async (file: File) => {
     setMode("loading");
@@ -40,6 +69,7 @@ export default function AnalysePage() {
       setPdfResult(data);
       setSelectedFragment(0);
       setMode("pdf-result");
+      refreshSaved();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Onbekende fout");
       setMode("error");
@@ -65,9 +95,34 @@ export default function AnalysePage() {
 
       setChordResult(data);
       setMode("chord-result");
+      refreshSaved();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Onbekende fout");
       setMode("error");
+    }
+  };
+
+  const loadSavedAnalyse = async (analyse: SavedAnalyse) => {
+    setLoadingSaved(true);
+    try {
+      const res = await fetch(`/api/analyses/${analyse.id}`);
+      const data = await res.json();
+
+      if (!res.ok) throw new Error("Kon analyse niet laden");
+
+      if (data.type === "pdf") {
+        setPdfResult(data.resultaat as PdfAnalyseResult);
+        setSelectedFragment(0);
+        setMode("pdf-result");
+      } else {
+        setChordResult(data.resultaat as AkkoordAnalyseResult);
+        setMode("chord-result");
+      }
+    } catch {
+      setError("Kon eerdere analyse niet laden");
+      setMode("error");
+    } finally {
+      setLoadingSaved(false);
     }
   };
 
@@ -256,6 +311,46 @@ export default function AnalysePage() {
           >
             Nieuwe analyse starten
           </button>
+        </div>
+      )}
+
+      {/* Eerdere analyses */}
+      {savedAnalyses.length > 0 && mode === "idle" && (
+        <div className="mt-8">
+          <h2 className="text-lg font-semibold text-white mb-4">
+            Eerdere analyses
+          </h2>
+          <div className="space-y-2">
+            {savedAnalyses.map((a) => (
+              <button
+                key={a.id}
+                onClick={() => loadSavedAnalyse(a)}
+                disabled={loadingSaved}
+                className="w-full text-left p-4 rounded-xl border border-slate-800 bg-slate-900/50 hover:border-slate-600 transition-colors disabled:opacity-50"
+              >
+                <div className="flex items-center gap-3">
+                  <span className="text-lg">
+                    {a.type === "pdf" ? "\u{1F4C4}" : "\u{1F3B5}"}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-white font-medium truncate">
+                      {a.titel}
+                    </div>
+                    <div className="text-xs text-slate-500">
+                      {a.type === "pdf" ? "Bladmuziek" : "Akkoorden"}
+                      {a.createdAt &&
+                        ` \u2014 ${new Date(a.createdAt).toLocaleDateString("nl-NL", {
+                          day: "numeric",
+                          month: "long",
+                          year: "numeric",
+                        })}`}
+                    </div>
+                  </div>
+                  <span className="text-slate-600 text-sm">&rarr;</span>
+                </div>
+              </button>
+            ))}
+          </div>
         </div>
       )}
     </div>

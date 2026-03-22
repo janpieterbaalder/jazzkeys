@@ -1,6 +1,7 @@
 "use client";
 
 import type { Fragment } from "@/lib/claude";
+import InteractieveNotenWeergave from "./InteractieveNotenWeergave";
 
 interface StukjeViewProps {
   fragment: Fragment;
@@ -9,6 +10,11 @@ interface StukjeViewProps {
 export default function StukjeView({ fragment }: StukjeViewProps) {
   return (
     <div className="space-y-4">
+      {/* Interactieve noten weergave — als maatNoten beschikbaar is */}
+      {fragment.maatNoten && fragment.maatNoten.length > 0 && (
+        <InteractieveNotenWeergave maatNoten={fragment.maatNoten} />
+      )}
+
       {/* Noten uitleg */}
       <div>
         <h4 className="text-sm font-semibold text-white mb-2">

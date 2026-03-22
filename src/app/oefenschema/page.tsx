@@ -2,10 +2,12 @@
 
 import { useState } from "react";
 import { practicePhases } from "@/data/practice-plans";
+import WeekDetailView from "@/components/oefenschema/WeekDetailView";
 
 export default function OefenschemaPage() {
   const [selectedPhase, setSelectedPhase] = useState(0);
   const [expandedDay, setExpandedDay] = useState<number | null>(null);
+  const [expandedWeek, setExpandedWeek] = useState<number | null>(null);
 
   const phase = practicePhases[selectedPhase];
 
@@ -27,6 +29,7 @@ export default function OefenschemaPage() {
             onClick={() => {
               setSelectedPhase(i);
               setExpandedDay(null);
+              setExpandedWeek(null);
             }}
             className={`p-3 rounded-xl border text-left transition-all ${
               selectedPhase === i
@@ -63,7 +66,7 @@ export default function OefenschemaPage() {
             <ul className="space-y-1.5">
               {phase.goals.map((goal, i) => (
                 <li key={i} className="flex items-start gap-2 text-sm text-slate-300">
-                  <span className="text-blue-500 mt-0.5">○</span>
+                  <span className="text-blue-500 mt-0.5">&#9675;</span>
                   {goal}
                 </li>
               ))}
@@ -122,7 +125,7 @@ export default function OefenschemaPage() {
                           key={j}
                           className="text-sm text-slate-400 flex items-start gap-2"
                         >
-                          <span className="text-slate-600 mt-0.5">•</span>
+                          <span className="text-slate-600 mt-0.5">&bull;</span>
                           {activity}
                         </li>
                       ))}
@@ -143,17 +146,49 @@ export default function OefenschemaPage() {
             {phase.weeklyFocus.map((week, i) => (
               <div
                 key={i}
-                className="p-4 rounded-xl border border-slate-800 bg-slate-900/50"
+                className="rounded-xl border border-slate-800 bg-slate-900/50 overflow-hidden"
               >
-                <div className="flex items-center gap-3 mb-1">
-                  <span className="text-xs text-blue-400 font-medium min-w-fit">
-                    {week.week}
-                  </span>
-                  <span className="text-sm font-medium text-white">
-                    {week.focus}
-                  </span>
-                </div>
-                <p className="text-sm text-slate-400">{week.details}</p>
+                <button
+                  onClick={() =>
+                    week.dagen
+                      ? setExpandedWeek(expandedWeek === i ? null : i)
+                      : undefined
+                  }
+                  className={`w-full text-left p-4 ${week.dagen ? "hover:bg-slate-800/30 cursor-pointer" : "cursor-default"} transition-colors`}
+                >
+                  <div className="flex items-center gap-3 mb-1">
+                    <span className="text-xs text-blue-400 font-medium min-w-fit">
+                      {week.week}
+                    </span>
+                    <span className="text-sm font-medium text-white">
+                      {week.focus}
+                    </span>
+                    {week.dagen && (
+                      <span className="ml-auto flex items-center gap-1 text-xs text-blue-400">
+                        {expandedWeek === i ? "Inklappen" : `${week.dagen.length} dagen`}
+                        <svg
+                          className={`w-3 h-3 transition-transform ${expandedWeek === i ? "rotate-180" : ""}`}
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                        >
+                          <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-sm text-slate-400">{week.details}</p>
+                </button>
+
+                {/* Expanded dag-voor-dag detail */}
+                {expandedWeek === i && week.dagen && (
+                  <div className="px-4 pb-4 border-t border-slate-800">
+                    <div className="pt-4">
+                      <WeekDetailView dagen={week.dagen} />
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
           </div>

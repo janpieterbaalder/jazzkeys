@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { analyseerPdf } from "@/lib/claude";
+import { db } from "@/lib/db";
+import { analyses } from "@/db/schema";
 
 export async function POST(request: NextRequest) {
   try {
@@ -33,6 +35,24 @@ export async function POST(request: NextRequest) {
 
     const result = await analyseerPdf(base64);
 
+    // Opslaan in database (als beschikbaar)
+    if (db) {
+      try {
+        const [saved] = await db
+          .insert(analyses)
+          .values({
+            titel: result.stukInfo.titel || file.name,
+            type: "pdf",
+            invoer: file.name,
+            resultaat: result,
+          })
+          .returning({ id: analyses.id });
+
+        return NextResponse.json({ ...result, id: saved.id });
+      } catch {
+        // Database fout — geef resultaat toch terug
+      }
+    }
     return NextResponse.json(result);
   } catch (error) {
     console.error("PDF analyse fout:", error);

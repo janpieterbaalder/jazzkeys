@@ -20,7 +20,41 @@ export interface WeeklyFocus {
   week: string;
   focus: string;
   details: string;
+  dagen?: DagSchema[];
 }
+
+export interface PianoVoorbeeld {
+  label: string;
+  noten: { note: string; color: string; label?: string }[];
+  uitleg: string;
+  startOctave?: number;
+  octaves?: number;
+}
+
+export interface OefenStap {
+  stap: number;
+  instructie: string;
+  details?: string;
+  pianoVoorbeeld?: PianoVoorbeeld;
+  tip?: string;
+}
+
+export interface ConcreteOefening {
+  titel: string;
+  duur: string;
+  doel: string;
+  stappen: OefenStap[];
+}
+
+export interface DagSchema {
+  dag: number;
+  dagLabel: string;
+  thema: string;
+  oefeningen: ConcreteOefening[];
+  dagTip?: string;
+}
+
+import { fase1Week1en2 } from "./practice-plans-fase1-detail";
 
 export const practicePhases: PracticePhase[] = [
   {
@@ -98,6 +132,7 @@ export const practicePhases: PracticePhase[] = [
         focus: "Majeur 7 en Dominant 7",
         details:
           "Leer Cmaj7, Fmaj7, Gmaj7, en C7, F7, G7. Speel ze als blokakkoorden en als shell voicings.",
+        dagen: fase1Week1en2,
       },
       {
         week: "Week 3-4",

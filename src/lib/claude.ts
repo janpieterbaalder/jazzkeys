@@ -8,6 +8,8 @@ const SYSTEM_PROMPT = `Je bent een ervaren jazz piano docent die bladmuziek anal
 3. Hoe je dit fragment kunt oefenen
 4. Hoe je het in jazz-stijl kunt spelen
 
+BELANGRIJK: Gebruik altijd wetenschappelijke nootnotatie met octaafnummer. Midden-C = C4. De octaaf onder midden-C = octaaf 3. Gebruik C, D, E, F, G, A, B voor stamtonen. Gebruik # voor kruis (bijv. F#4, C#3) en b voor mol (bijv. Bb3, Eb4).
+
 Antwoord ALTIJD in het Nederlands. Geef je antwoord als JSON.`;
 
 export interface StukInfo {
@@ -25,6 +27,21 @@ export interface AkkoordAnalyse {
   voicingSuggesties: string;
 }
 
+export interface NootData {
+  noot: string;
+  duur: string;
+  beatPositie: number;
+  hand: "rechts" | "links";
+  balkPositie: string;
+  uitleg: string;
+}
+
+export interface MaatData {
+  maatNummer: number;
+  noten: NootData[];
+  akkoord?: string;
+}
+
 export interface Fragment {
   nummer: number;
   maten: string;
@@ -38,6 +55,7 @@ export interface Fragment {
   akkoordAnalyse: AkkoordAnalyse;
   oefentip: string;
   jazzTip: string;
+  maatNoten?: MaatData[];
 }
 
 export interface PdfAnalyseResult {
@@ -67,7 +85,7 @@ export async function analyseerPdf(
 ): Promise<PdfAnalyseResult> {
   const message = await anthropic.messages.create({
     model: "claude-sonnet-4-20250514",
-    max_tokens: 8192,
+    max_tokens: 16384,
     system: SYSTEM_PROMPT,
     messages: [
       {
@@ -84,6 +102,8 @@ export async function analyseerPdf(
           {
             type: "text",
             text: `Analyseer deze bladmuziek. Knip het stuk op in fragmenten van 2-4 maten. Het doel is de leerling te helpen noten leren lezen — niet het stuk uit het hoofd leren.
+
+BELANGRIJK: Per fragment moet je een "maatNoten" array meegeven met per maat elke individuele noot als gestructureerd object. Gebruik wetenschappelijke nootnotatie (C4 = midden-C). Dit is essentieel zodat de leerling op elke noot kan klikken om te zien waar deze op het keyboard zit.
 
 Geef je antwoord als JSON in dit formaat:
 {
@@ -112,10 +132,44 @@ Geef je antwoord als JSON in dit formaat:
         "voicingSuggesties": "Hoe je deze akkoorden als jazz voicings kunt spelen..."
       },
       "oefentip": "Concrete oefenstrategie voor dit fragment...",
-      "jazzTip": "Hoe je dit fragment in jazz-stijl kunt spelen..."
+      "jazzTip": "Hoe je dit fragment in jazz-stijl kunt spelen...",
+      "maatNoten": [
+        {
+          "maatNummer": 1,
+          "akkoord": "Cmaj7",
+          "noten": [
+            {
+              "noot": "C4",
+              "duur": "kwart",
+              "beatPositie": 1,
+              "hand": "rechts",
+              "balkPositie": "hulplijn onder de G-sleutel",
+              "uitleg": "Dit is midden-C, de noot op de hulplijn net onder de notenbalk van de G-sleutel"
+            },
+            {
+              "noot": "E4",
+              "duur": "kwart",
+              "beatPositie": 2,
+              "hand": "rechts",
+              "balkPositie": "eerste lijn van de G-sleutel",
+              "uitleg": "De E zit op de eerste (onderste) lijn van de G-sleutel"
+            },
+            {
+              "noot": "C3",
+              "duur": "half",
+              "beatPositie": 1,
+              "hand": "links",
+              "balkPositie": "derde ruimte van de F-sleutel",
+              "uitleg": "Deze C zit een octaaf onder midden-C, in de derde ruimte van de F-sleutel"
+            }
+          ]
+        }
+      ]
     }
   ]
 }
+
+Geef ELKE noot die je kunt lezen in de bladmuziek als apart object in de maatNoten array. Wees zo compleet mogelijk.
 
 Geef ALLEEN geldige JSON terug, geen andere tekst.`,
           },
