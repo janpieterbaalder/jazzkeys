@@ -151,82 +151,91 @@ export interface NootVisueel {
   filled: boolean; // gevulde nootkop?
   hasStem: boolean; // heeft een stok?
   flags: number; // aantal vlaggen (0, 1, 2)
+  dotted: boolean; // punt achter de noot?
   headWidth: number; // breedte nootkop
   headHeight: number; // hoogte nootkop
 }
 
 export function getDuurVisueel(duur: string): NootVisueel {
-  switch (duur) {
-    case "heel":
-      return {
-        filled: false,
-        hasStem: false,
-        flags: 0,
-        headWidth: 14,
-        headHeight: 10,
-      };
-    case "half":
-      return {
-        filled: false,
-        hasStem: true,
-        flags: 0,
-        headWidth: 12,
-        headHeight: 9,
-      };
-    case "kwart":
-      return {
-        filled: true,
-        hasStem: true,
-        flags: 0,
-        headWidth: 12,
-        headHeight: 9,
-      };
-    case "achtste":
-      return {
-        filled: true,
-        hasStem: true,
-        flags: 1,
-        headWidth: 12,
-        headHeight: 9,
-      };
-    case "zestiende":
-      return {
-        filled: true,
-        hasStem: true,
-        flags: 2,
-        headWidth: 12,
-        headHeight: 9,
-      };
-    default:
-      return {
-        filled: true,
-        hasStem: true,
-        flags: 0,
-        headWidth: 12,
-        headHeight: 9,
-      };
-  }
+  // Herken "met_punt" varianten (bijv. "half_met_punt", "kwart_met_punt")
+  const isDotted = duur.includes("_met_punt") || duur.includes("punt");
+  const baseDuur = duur.replace(/_met_punt|_punt|punt/g, "").replace(/_$/, "");
+
+  const base = ((): Omit<NootVisueel, "dotted"> => {
+    switch (baseDuur) {
+      case "heel":
+        return {
+          filled: false,
+          hasStem: false,
+          flags: 0,
+          headWidth: 16,
+          headHeight: 12,
+        };
+      case "half":
+        return {
+          filled: false,
+          hasStem: true,
+          flags: 0,
+          headWidth: 14,
+          headHeight: 11,
+        };
+      case "kwart":
+        return {
+          filled: true,
+          hasStem: true,
+          flags: 0,
+          headWidth: 14,
+          headHeight: 11,
+        };
+      case "achtste":
+        return {
+          filled: true,
+          hasStem: true,
+          flags: 1,
+          headWidth: 14,
+          headHeight: 11,
+        };
+      case "zestiende":
+        return {
+          filled: true,
+          hasStem: true,
+          flags: 2,
+          headWidth: 14,
+          headHeight: 11,
+        };
+      default:
+        return {
+          filled: true,
+          hasStem: true,
+          flags: 0,
+          headWidth: 14,
+          headHeight: 11,
+        };
+    }
+  })();
+
+  return { ...base, dotted: isDotted };
 }
 
 // ─── Layout constanten ─────────────────────────────────────────────
 
 export const STAFF_CONSTANTS = {
   /** Afstand tussen twee opeenvolgende balkposities (halve lijn-afstand) */
-  STEP: 6,
+  STEP: 8,
   /** Afstand tussen de 5 lijnen: 4 ruimtes × 2 stappen × STEP */
-  STAFF_HEIGHT: 8 * 6, // 48px
+  STAFF_HEIGHT: 8 * 8, // 64px
   /** Ruimte tussen treble en bass staff */
-  STAFF_GAP: 50,
+  STAFF_GAP: 60,
   /** Breedte per maat (basis, schaalt met aantal noten) */
-  MEASURE_BASE_WIDTH: 180,
+  MEASURE_BASE_WIDTH: 200,
   /** Extra breedte per noot in een maat */
-  NOTE_EXTRA_WIDTH: 30,
+  NOTE_EXTRA_WIDTH: 40,
   /** Padding links (voor sleutel + maatsoort) */
-  LEFT_PADDING: 60,
+  LEFT_PADDING: 70,
   /** Padding rechts per maat */
-  RIGHT_PADDING: 20,
+  RIGHT_PADDING: 25,
   /** Stoklengte */
-  STEM_LENGTH: 30,
+  STEM_LENGTH: 36,
   /** Kleur: balklijnen */
   LINE_COLOR: "rgba(100, 116, 139, 0.35)", // slate-500/35
   /** Kleur: maatstrepen */
@@ -267,7 +276,7 @@ export function calculateTotalWidth(measures: { noten: unknown[] }[]): number {
  */
 export function calculateTotalHeight(): number {
   // Ruimte boven treble (akkoord labels + noten boven balk)
-  const topMargin = 40;
+  const topMargin = 50;
   // Treble staff
   const trebleHeight = STAFF_CONSTANTS.STAFF_HEIGHT;
   // Gap
@@ -275,7 +284,7 @@ export function calculateTotalHeight(): number {
   // Bass staff
   const bassHeight = STAFF_CONSTANTS.STAFF_HEIGHT;
   // Ruimte onder bass (noten onder balk)
-  const bottomMargin = 30;
+  const bottomMargin = 40;
 
   return topMargin + trebleHeight + gap + bassHeight + bottomMargin;
 }
@@ -284,7 +293,7 @@ export function calculateTotalHeight(): number {
  * Y-coördinaat van de bovenste lijn van elke balk.
  */
 export function getTrebleTopY(): number {
-  return 40; // topMargin
+  return 50; // topMargin
 }
 
 export function getBassTopY(): number {

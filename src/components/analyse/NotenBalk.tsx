@@ -28,8 +28,8 @@ function TrebleClef({ x, y }: { x: number; y: number }) {
   return (
     <text
       x={x}
-      y={y + 34}
-      fontSize={58}
+      y={y + 46}
+      fontSize={72}
       fill="#94a3b8"
       fontFamily="serif"
       style={{ userSelect: "none" }}
@@ -43,8 +43,8 @@ function BassClef({ x, y }: { x: number; y: number }) {
   return (
     <text
       x={x}
-      y={y + 22}
-      fontSize={38}
+      y={y + 28}
+      fontSize={46}
       fill="#94a3b8"
       fontFamily="serif"
       style={{ userSelect: "none" }}
@@ -214,6 +214,16 @@ function NoteHead({
         </>
       )}
 
+      {/* Punt (dotted noot) */}
+      {visueel.dotted && (
+        <circle
+          cx={x + hw + 5}
+          cy={y}
+          r={2}
+          fill={noteColor}
+        />
+      )}
+
       {/* Voorteken (#/b) */}
       {accidental && (
         <text
@@ -303,7 +313,7 @@ export default function NotenBalk({
   const trebleTopY = getTrebleTopY();
   const bassTopY = getBassTopY();
   const totalHeight =
-    40 + SC.STAFF_HEIGHT + SC.STAFF_GAP + SC.STAFF_HEIGHT + 30;
+    50 + SC.STAFF_HEIGHT + SC.STAFF_GAP + SC.STAFF_HEIGHT + 40;
 
   const isSelectedNoot = (noot: NootData) =>
     selectedNoot !== null &&
@@ -334,16 +344,16 @@ export default function NotenBalk({
       <StaffLines topY={bassTopY} width={layout.totalWidth} />
 
       {/* Sleutels */}
-      <TrebleClef x={6} y={trebleTopY - 8} />
-      <BassClef x={10} y={bassTopY - 4} />
+      <TrebleClef x={6} y={trebleTopY - 12} />
+      <BassClef x={10} y={bassTopY - 6} />
 
       {/* Maatsoort */}
       {maatsoort && (
         <>
           <text
-            x={44}
+            x={50}
             y={trebleTopY + SC.STEP * 3}
-            fontSize={16}
+            fontSize={20}
             fontWeight="bold"
             fill="#94a3b8"
             style={{ userSelect: "none" }}
@@ -351,9 +361,9 @@ export default function NotenBalk({
             {maatsoort.split("/")[0]}
           </text>
           <text
-            x={44}
+            x={50}
             y={trebleTopY + SC.STEP * 7}
-            fontSize={16}
+            fontSize={20}
             fontWeight="bold"
             fill="#94a3b8"
             style={{ userSelect: "none" }}
