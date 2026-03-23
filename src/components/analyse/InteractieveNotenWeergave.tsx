@@ -1,19 +1,26 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import type { MaatData, NootData } from "@/lib/claude";
 import { parseNote } from "@/lib/piano-utils";
 import PianoKeyboard from "@/components/piano/PianoKeyboard";
-import MaatNotenView from "./MaatNotenView";
+import NotenBalk from "./NotenBalk";
+import NotenBalkControls from "./NotenBalkControls";
 
 interface InteractieveNotenWeergaveProps {
   maatNoten: MaatData[];
+  maatsoort?: string;
 }
 
 export default function InteractieveNotenWeergave({
   maatNoten,
+  maatsoort,
 }: InteractieveNotenWeergaveProps) {
   const [selectedNoot, setSelectedNoot] = useState<NootData | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [speed, setSpeed] = useState(1);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const animationRef = useRef<number | null>(null);
 
   // Bereken het bereik van het keyboard op basis van alle noten
   const { startOctave, octaves } = useMemo(() => {
@@ -34,7 +41,6 @@ export default function InteractieveNotenWeergave({
       }
     }
 
-    // Zorg voor minimaal 2 octaven
     const range = Math.max(2, maxOctave - minOctave + 1);
     return { startOctave: minOctave, octaves: range };
   }, [maatNoten]);
@@ -53,28 +59,76 @@ export default function InteractieveNotenWeergave({
     ];
   }, [selectedNoot]);
 
+  // Auto-scroll animatie
+  const animate = useCallback(() => {
+    if (!scrollRef.current) return;
+    const el = scrollRef.current;
+    const scrollSpeed = speed * 0.8; // pixels per frame
+    el.scrollLeft += scrollSpeed;
+
+    // Stop als we aan het einde zijn
+    if (el.scrollLeft >= el.scrollWidth - el.clientWidth) {
+      setIsPlaying(false);
+      return;
+    }
+
+    animationRef.current = requestAnimationFrame(animate);
+  }, [speed]);
+
+  useEffect(() => {
+    if (isPlaying) {
+      animationRef.current = requestAnimationFrame(animate);
+    } else if (animationRef.current) {
+      cancelAnimationFrame(animationRef.current);
+      animationRef.current = null;
+    }
+
+    return () => {
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current);
+      }
+    };
+  }, [isPlaying, animate]);
+
+  const handlePlayPause = () => setIsPlaying(!isPlaying);
+
+  const handleReset = () => {
+    setIsPlaying(false);
+    if (scrollRef.current) {
+      scrollRef.current.scrollLeft = 0;
+    }
+  };
+
+  const handleSpeedChange = (newSpeed: number) => setSpeed(newSpeed);
+
   return (
     <div className="space-y-3">
-      {/* Titel */}
-      <div className="flex items-center gap-2 mb-2">
-        <h4 className="text-sm font-semibold text-white">
-          Interactieve notenweergave
-        </h4>
-        <span className="text-xs text-slate-500">
-          Klik op een noot om te zien waar deze op het keyboard zit
-        </span>
+      {/* Controls */}
+      <NotenBalkControls
+        isPlaying={isPlaying}
+        speed={speed}
+        onPlayPause={handlePlayPause}
+        onSpeedChange={handleSpeedChange}
+        onReset={handleReset}
+      />
+
+      {/* Notenbalk (horizontaal scrollbaar) */}
+      <div
+        ref={scrollRef}
+        className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent"
+        style={{ WebkitOverflowScrolling: "touch" }}
+      >
+        <NotenBalk
+          maatNoten={maatNoten}
+          selectedNoot={selectedNoot}
+          onNootSelect={setSelectedNoot}
+          maatsoort={maatsoort}
+        />
       </div>
 
-      {/* Maten */}
-      <div className="space-y-2">
-        {maatNoten.map((maat, i) => (
-          <MaatNotenView
-            key={i}
-            maat={maat}
-            selectedNoot={selectedNoot}
-            onNootSelect={setSelectedNoot}
-          />
-        ))}
+      {/* Scroll hint voor mobiel */}
+      <div className="text-center text-[10px] text-slate-600 md:hidden">
+        Swipe naar rechts om door het stuk te scrollen
       </div>
 
       {/* Sticky piano + noot detail */}
@@ -126,7 +180,7 @@ export default function InteractieveNotenWeergave({
             </div>
           ) : (
             <p className="mt-2 text-xs text-slate-600 text-center">
-              Klik op een noot hierboven om details te zien
+              Klik op een noot in de notenbalk om details te zien
             </p>
           )}
         </div>

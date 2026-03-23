@@ -249,6 +249,7 @@ export default function AnalysePage() {
 
               <StukjeView
                 fragment={pdfResult.fragmenten[selectedFragment]}
+                maatsoort={pdfResult.stukInfo.maatsoort}
               />
 
               {/* Navigation */}

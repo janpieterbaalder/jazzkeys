@@ -5,14 +5,18 @@ import InteractieveNotenWeergave from "./InteractieveNotenWeergave";
 
 interface StukjeViewProps {
   fragment: Fragment;
+  maatsoort?: string;
 }
 
-export default function StukjeView({ fragment }: StukjeViewProps) {
+export default function StukjeView({ fragment, maatsoort }: StukjeViewProps) {
   return (
     <div className="space-y-4">
-      {/* Interactieve noten weergave — als maatNoten beschikbaar is */}
+      {/* Interactieve notenbalk — als maatNoten beschikbaar is */}
       {fragment.maatNoten && fragment.maatNoten.length > 0 && (
-        <InteractieveNotenWeergave maatNoten={fragment.maatNoten} />
+        <InteractieveNotenWeergave
+          maatNoten={fragment.maatNoten}
+          maatsoort={maatsoort}
+        />
       )}
 
       {/* Noten uitleg */}
