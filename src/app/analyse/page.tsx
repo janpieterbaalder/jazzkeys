@@ -1,11 +1,17 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import dynamic from "next/dynamic";
 import PdfUploader from "@/components/analyse/PdfUploader";
 import ChordInput from "@/components/analyse/ChordInput";
 import StukjeView from "@/components/analyse/StukjeView";
 import AkkoordResult from "@/components/analyse/AkkoordResult";
 import type { PdfAnalyseResult, AkkoordAnalyseResult } from "@/lib/claude";
+
+const BladmuziekViewer = dynamic(
+  () => import("@/components/analyse/BladmuziekViewer"),
+  { ssr: false }
+);
 
 type AnalyseMode = "idle" | "loading" | "pdf-result" | "chord-result" | "error";
 
@@ -27,6 +33,7 @@ export default function AnalysePage() {
   const [error, setError] = useState("");
   const [savedAnalyses, setSavedAnalyses] = useState<SavedAnalyse[]>([]);
   const [loadingSaved, setLoadingSaved] = useState(false);
+  const [showBladmuziek, setShowBladmuziek] = useState(true);
 
   // Eerdere analyses ophalen bij laden
   useEffect(() => {
@@ -137,6 +144,31 @@ export default function AnalysePage() {
         Upload bladmuziek om stap voor stap noten te leren lezen, of voer
         akkoorden in voor jazz-analyse.
       </p>
+
+      {/* Bladmuziek viewer */}
+      <div className="mb-8">
+        <button
+          onClick={() => setShowBladmuziek(!showBladmuziek)}
+          className="flex items-center gap-2 mb-4 text-sm text-slate-400 hover:text-white transition-colors"
+        >
+          <svg
+            className={`w-4 h-4 transition-transform ${showBladmuziek ? "rotate-90" : ""}`}
+            fill="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path d="M8 5v14l11-7z" />
+          </svg>
+          Midwayer — Joep Beving (bladmuziek)
+        </button>
+        {showBladmuziek && (
+          <div className="p-5 rounded-xl border border-slate-800 bg-slate-900/50">
+            <BladmuziekViewer
+              xmlUrl="/scores/midwayer-ace.xml"
+              titel="Midwayer — Joep Beving"
+            />
+          </div>
+        )}
+      </div>
 
       {/* Input section */}
       <div className="space-y-6 mb-8">
