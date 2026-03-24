@@ -33,7 +33,7 @@ export default function AnalysePage() {
   const [error, setError] = useState("");
   const [savedAnalyses, setSavedAnalyses] = useState<SavedAnalyse[]>([]);
   const [loadingSaved, setLoadingSaved] = useState(false);
-  const [showBladmuziek, setShowBladmuziek] = useState(true);
+  const [activeScore, setActiveScore] = useState<{ url: string; titel: string } | null>(null);
 
   // Eerdere analyses ophalen bij laden
   useEffect(() => {
@@ -145,35 +145,57 @@ export default function AnalysePage() {
         akkoorden in voor jazz-analyse.
       </p>
 
-      {/* Bladmuziek viewer */}
-      <div className="mb-8">
-        <button
-          onClick={() => setShowBladmuziek(!showBladmuziek)}
-          className="flex items-center gap-2 mb-4 text-sm text-slate-400 hover:text-white transition-colors"
-        >
-          <svg
-            className={`w-4 h-4 transition-transform ${showBladmuziek ? "rotate-90" : ""}`}
-            fill="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path d="M8 5v14l11-7z" />
-          </svg>
-          Midwayer — Joep Beving (bladmuziek)
-        </button>
-        {showBladmuziek && (
-          <div className="p-5 rounded-xl border border-slate-800 bg-slate-900/50">
-            <BladmuziekViewer
-              xmlUrl="/scores/midwayer-ace.xml"
-              titel="Midwayer — Joep Beving"
-            />
+      {/* Active score viewer */}
+      {activeScore && (
+        <div className="mb-8 p-5 rounded-xl border border-slate-800 bg-slate-900/50">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-xl font-bold text-white">{activeScore.titel}</h2>
+            <button
+              onClick={() => setActiveScore(null)}
+              className="text-slate-500 hover:text-white transition-colors text-sm"
+            >
+              Sluiten
+            </button>
           </div>
-        )}
-      </div>
+          <BladmuziekViewer xmlUrl={activeScore.url} />
+        </div>
+      )}
 
       {/* Input section */}
       <div className="space-y-6 mb-8">
         <PdfUploader onUpload={handlePdfUpload} isLoading={isLoading} />
         <ChordInput onSubmit={handleChordSubmit} isLoading={isLoading} />
+      </div>
+
+      {/* Muziekbibliotheek */}
+      <div className="mb-8">
+        <h2 className="text-lg font-semibold text-white mb-4">
+          Muziekbibliotheek
+        </h2>
+        <div className="grid gap-3">
+          {[
+            { titel: "Midwayer — Joep Beving", url: "/scores/midwayer-ace.xml", componist: "Joep Beving" },
+          ].map((stuk) => (
+            <button
+              key={stuk.url}
+              onClick={() => setActiveScore({ url: stuk.url, titel: stuk.titel })}
+              className={`w-full text-left p-4 rounded-xl border transition-colors ${
+                activeScore?.url === stuk.url
+                  ? "border-blue-500/50 bg-blue-500/10"
+                  : "border-slate-800 bg-slate-900/50 hover:border-slate-600"
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <span className="text-2xl">🎹</span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-white font-medium truncate">{stuk.titel}</div>
+                  <div className="text-xs text-slate-500">{stuk.componist}</div>
+                </div>
+                <span className="text-slate-600 text-sm">&rarr;</span>
+              </div>
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Loading */}
