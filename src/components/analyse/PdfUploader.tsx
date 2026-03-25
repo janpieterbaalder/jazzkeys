@@ -4,27 +4,63 @@ import { useCallback, useState } from "react";
 
 interface PdfUploaderProps {
   onUpload: (file: File) => void;
+  onXmlUpload: (xmlContent: string, fileName: string) => void;
   isLoading: boolean;
 }
 
-export default function PdfUploader({ onUpload, isLoading }: PdfUploaderProps) {
+const ACCEPTED_TYPES = new Set([
+  "application/pdf",
+  "text/xml",
+  "application/xml",
+]);
+
+const ACCEPTED_EXTENSIONS = [".pdf", ".xml", ".musicxml"];
+
+function getFileExtension(name: string): string {
+  const dot = name.lastIndexOf(".");
+  return dot >= 0 ? name.slice(dot).toLowerCase() : "";
+}
+
+function isAcceptedFile(file: File): "pdf" | "xml" | null {
+  const ext = getFileExtension(file.name);
+  if (ext === ".pdf" || file.type === "application/pdf") return "pdf";
+  if (ext === ".xml" || ext === ".musicxml" || ACCEPTED_TYPES.has(file.type)) return "xml";
+  return null;
+}
+
+export default function PdfUploader({ onUpload, onXmlUpload, isLoading }: PdfUploaderProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
+  const [fileType, setFileType] = useState<"pdf" | "xml" | null>(null);
 
   const handleFile = useCallback(
     (file: File) => {
-      if (file.type !== "application/pdf") {
-        alert("Alleen PDF-bestanden zijn toegestaan");
+      const type = isAcceptedFile(file);
+      if (!type) {
+        alert("Alleen PDF- en MusicXML-bestanden zijn toegestaan");
         return;
       }
       if (file.size > 10 * 1024 * 1024) {
         alert("Bestand is te groot (maximaal 10MB)");
         return;
       }
+
       setFileName(file.name);
-      onUpload(file);
+      setFileType(type);
+
+      if (type === "pdf") {
+        onUpload(file);
+      } else {
+        // XML: read as text and pass directly — no API key needed
+        const reader = new FileReader();
+        reader.onload = () => {
+          const text = reader.result as string;
+          onXmlUpload(text, file.name);
+        };
+        reader.readAsText(file);
+      }
     },
-    [onUpload]
+    [onUpload, onXmlUpload]
   );
 
   const handleDrop = useCallback(
@@ -59,7 +95,7 @@ export default function PdfUploader({ onUpload, isLoading }: PdfUploaderProps) {
     >
       <input
         type="file"
-        accept=".pdf"
+        accept={ACCEPTED_EXTENSIONS.join(",")}
         onChange={(e) => {
           const file = e.target.files?.[0];
           if (file) handleFile(file);
@@ -68,21 +104,27 @@ export default function PdfUploader({ onUpload, isLoading }: PdfUploaderProps) {
         disabled={isLoading}
       />
 
-      <div className="text-3xl mb-3">📄</div>
+      <div className="text-3xl mb-3">{fileType === "xml" ? "🎵" : "📄"}</div>
 
       {fileName ? (
         <div>
           <p className="text-white font-medium">{fileName}</p>
           <p className="text-xs text-slate-500 mt-1">
-            {isLoading ? "Bezig met analyseren..." : "Klik of sleep om te vervangen"}
+            {isLoading
+              ? "Bezig met analyseren..."
+              : fileType === "xml"
+                ? "MusicXML — wordt direct weergegeven"
+                : "Klik of sleep om te vervangen"}
           </p>
         </div>
       ) : (
         <div>
           <p className="text-slate-300 mb-1">
-            Sleep een PDF hierheen of klik om te uploaden
+            Sleep een PDF of MusicXML hierheen
           </p>
-          <p className="text-xs text-slate-500">Maximaal 10MB</p>
+          <p className="text-xs text-slate-500">
+            PDF wordt geanalyseerd met AI — XML wordt direct weergegeven
+          </p>
         </div>
       )}
     </div>

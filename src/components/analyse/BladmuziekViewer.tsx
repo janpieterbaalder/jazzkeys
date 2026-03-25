@@ -4,21 +4,33 @@ import { useEffect, useState } from "react";
 import OsmdRenderer from "./OsmdRenderer";
 
 interface BladmuziekViewerProps {
-  xmlUrl: string;
+  xmlUrl?: string;
+  xmlContent?: string;
   titel?: string;
   toMeasure?: number;
 }
 
 export default function BladmuziekViewer({
   xmlUrl,
+  xmlContent,
   titel,
   toMeasure,
 }: BladmuziekViewerProps) {
-  const [musicXml, setMusicXml] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [musicXml, setMusicXml] = useState<string | null>(xmlContent ?? null);
+  const [loading, setLoading] = useState(!xmlContent);
   const [error, setError] = useState<string | null>(null);
 
+  // If xmlContent is provided directly, use it immediately
   useEffect(() => {
+    if (xmlContent) {
+      setMusicXml(xmlContent);
+      setLoading(false);
+      setError(null);
+      return;
+    }
+
+    if (!xmlUrl) return;
+
     setLoading(true);
     setError(null);
 
@@ -35,7 +47,7 @@ export default function BladmuziekViewer({
         setError(err instanceof Error ? err.message : "Kon bestand niet laden");
         setLoading(false);
       });
-  }, [xmlUrl]);
+  }, [xmlUrl, xmlContent]);
 
   if (loading) {
     return (

@@ -33,7 +33,7 @@ export default function AnalysePage() {
   const [error, setError] = useState("");
   const [savedAnalyses, setSavedAnalyses] = useState<SavedAnalyse[]>([]);
   const [loadingSaved, setLoadingSaved] = useState(false);
-  const [activeScore, setActiveScore] = useState<{ url: string; titel: string } | null>(null);
+  const [activeScore, setActiveScore] = useState<{ url?: string; xml?: string; titel: string } | null>(null);
 
   // Eerdere analyses ophalen bij laden
   useEffect(() => {
@@ -81,6 +81,12 @@ export default function AnalysePage() {
       setError(err instanceof Error ? err.message : "Onbekende fout");
       setMode("error");
     }
+  };
+
+  const handleXmlUpload = (xmlContent: string, fileName: string) => {
+    // XML goes directly to the OSMD renderer — no API key needed
+    const titel = fileName.replace(/\.(xml|musicxml)$/i, "").replace(/[-_]/g, " ");
+    setActiveScore({ xml: xmlContent, titel });
   };
 
   const handleChordSubmit = async (chords: string) => {
@@ -157,13 +163,13 @@ export default function AnalysePage() {
               Sluiten
             </button>
           </div>
-          <BladmuziekViewer xmlUrl={activeScore.url} />
+          <BladmuziekViewer xmlUrl={activeScore.url} xmlContent={activeScore.xml} />
         </div>
       )}
 
       {/* Input section */}
       <div className="space-y-6 mb-8">
-        <PdfUploader onUpload={handlePdfUpload} isLoading={isLoading} />
+        <PdfUploader onUpload={handlePdfUpload} onXmlUpload={handleXmlUpload} isLoading={isLoading} />
         <ChordInput onSubmit={handleChordSubmit} isLoading={isLoading} />
       </div>
 
