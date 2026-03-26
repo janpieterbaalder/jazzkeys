@@ -196,24 +196,57 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
     };
     document.addEventListener("fullscreenchange", handleFsChange);
     document.addEventListener("webkitfullscreenchange", handleFsChange);
+
+    // Mobile back-button support: push a history entry when entering fullscreen,
+    // so the hardware back button exits fullscreen instead of navigating away.
+    const handlePopState = () => {
+      const fake = playerRef.current?.classList.contains("fake-fullscreen");
+      if (fake || document.fullscreenElement) {
+        playerRef.current?.classList.remove("fake-fullscreen");
+        if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+        setIsFullscreen(false);
+        try { screen.orientation?.unlock?.(); } catch {}
+      }
+    };
+    window.addEventListener("popstate", handlePopState);
+
     return () => {
       document.removeEventListener("fullscreenchange", handleFsChange);
       document.removeEventListener("webkitfullscreenchange", handleFsChange);
+      window.removeEventListener("popstate", handlePopState);
     };
   }, []);
 
   const enterFullscreen = useCallback(() => {
     const el = playerRef.current;
     if (!el) return;
+
+    const useFake = () => {
+      el.classList.add("fake-fullscreen");
+      setIsFullscreen(true);
+      // Push history entry so mobile back-button exits fullscreen
+      history.pushState({ fullscreen: true }, "");
+      // Lock to landscape on mobile if supported
+      try { screen.orientation?.lock?.("landscape").catch(() => {}); } catch {}
+    };
+
+    // On mobile browsers (especially iOS), requestFullscreen on divs is
+    // unsupported or blocked. Detect and go straight to fake-fullscreen.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    if (isIOS) {
+      useFake();
+      return;
+    }
+
     if (el.requestFullscreen) {
-      el.requestFullscreen().catch(() => { el.classList.add("fake-fullscreen"); setIsFullscreen(true); });
+      el.requestFullscreen().catch(useFake);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } else if ((el as any).webkitRequestFullscreen) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (el as any).webkitRequestFullscreen();
     } else {
-      el.classList.add("fake-fullscreen");
-      setIsFullscreen(true);
+      useFake();
     }
   }, []);
 
@@ -223,6 +256,7 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
     else if ((document as any).webkitExitFullscreen) (document as any).webkitExitFullscreen();
     playerRef.current?.classList.remove("fake-fullscreen");
     setIsFullscreen(false);
+    try { screen.orientation?.unlock?.(); } catch {}
   }, []);
 
   // Keep speedRef in sync
@@ -555,12 +589,14 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
           left: 0 !important;
           width: 100vw !important;
           height: 100vh !important;
+          height: 100dvh !important;
           z-index: 99999 !important;
           background: #020617 !important;
           display: flex !important;
           flex-direction: column !important;
           padding: 4px !important;
           gap: 4px !important;
+          overflow: hidden !important;
         }
       `}</style>
       <div ref={playerRef} className={`${isFullscreen ? "bg-slate-950 flex flex-col h-screen p-1 gap-1" : "space-y-2"}`}>
