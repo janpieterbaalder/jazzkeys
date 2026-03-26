@@ -586,7 +586,7 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
         Piano
       </button>
       {isFullscreen ? (
-        <button onClick={exitFullscreen} className="px-2 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 text-sm transition-colors" title="Sluiten">
+        <button onClick={exitFullscreen} className="px-2 py-1.5 rounded-lg bg-orange-600 hover:bg-orange-500 text-white text-sm transition-colors" title="Sluiten">
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path d="M6 18L18 6M6 6l12 12" /></svg>
         </button>
       ) : (
