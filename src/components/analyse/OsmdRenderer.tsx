@@ -193,6 +193,26 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
   const dialogRef = useRef<HTMLDialogElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
 
+  // Scale the OSMD SVG so the full grand staff fits the available height
+  const scaleScoreToFit = useCallback(() => {
+    const scroll = scrollRef.current;
+    if (!scroll) return;
+    const svg = scroll.querySelector("svg");
+    if (!svg) return;
+    const svgH = parseFloat(svg.getAttribute("height") || "0");
+    if (svgH <= 0) return;
+    const availH = scroll.clientHeight;
+    if (availH <= 0 || availH >= svgH) {
+      // Enough space — remove any scaling
+      svg.style.transform = "";
+      svg.style.transformOrigin = "";
+      return;
+    }
+    const scale = availH / svgH;
+    svg.style.transform = `scale(${scale})`;
+    svg.style.transformOrigin = "top left";
+  }, []);
+
   const enterFullscreen = useCallback(() => {
     const dialog = dialogRef.current;
     const player = playerRef.current;
@@ -202,13 +222,18 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
     setIsFullscreen(true);
     history.pushState({ fullscreen: true }, "");
     try { screen.orientation?.lock?.("landscape").catch(() => {}); } catch {}
-  }, []);
+    // Scale score after layout settles
+    requestAnimationFrame(() => requestAnimationFrame(scaleScoreToFit));
+  }, [scaleScoreToFit]);
 
   const exitFullscreen = useCallback(() => {
     const dialog = dialogRef.current;
     const player = playerRef.current;
     const wrapper = wrapperRef.current;
     if (!player || !wrapper) return;
+    // Remove scaling before moving back
+    const svg = scrollRef.current?.querySelector("svg");
+    if (svg) { svg.style.transform = ""; svg.style.transformOrigin = ""; }
     dialog?.close();
     wrapper.appendChild(player);
     setIsFullscreen(false);
@@ -223,6 +248,9 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
     const handleClose = () => {
       const player = playerRef.current;
       const wrapper = wrapperRef.current;
+      // Remove SVG scaling
+      const svg = scrollRef.current?.querySelector("svg");
+      if (svg) { svg.style.transform = ""; svg.style.transformOrigin = ""; }
       if (player && wrapper) wrapper.appendChild(player);
       setIsFullscreen(false);
       try { screen.orientation?.unlock?.(); } catch {}
@@ -242,6 +270,19 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
       window.removeEventListener("popstate", handlePopState);
     };
   }, []);
+
+  // Re-scale score when piano is toggled in fullscreen, or on orientation change
+  useEffect(() => {
+    if (isFullscreen) {
+      requestAnimationFrame(() => requestAnimationFrame(scaleScoreToFit));
+    }
+  }, [isFullscreen, showPiano, scaleScoreToFit]);
+
+  useEffect(() => {
+    const handleResize = () => { if (isFullscreen) scaleScoreToFit(); };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [isFullscreen, scaleScoreToFit]);
 
   // Keep speedRef in sync
   useEffect(() => { speedRef.current = speed; }, [speed]);
@@ -566,13 +607,18 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
           height: 100vh; max-height: 100vh;
           height: 100dvh; max-height: 100dvh;
           background: #020617;
+          padding-left: env(safe-area-inset-left, 0px);
+          padding-right: env(safe-area-inset-right, 0px);
+          padding-top: env(safe-area-inset-top, 0px);
+          padding-bottom: env(safe-area-inset-bottom, 0px);
+          overflow: hidden;
         }
         .fs-dialog::backdrop { background: #020617; }
       `}</style>
       <div ref={wrapperRef}>
         <div ref={playerRef} className={`${isFullscreen ? "bg-slate-950 flex flex-col w-full h-full p-1 gap-1" : "space-y-2"}`}>
           {controlsBar()}
-          {showPiano && pianoKeyboard(isFullscreen ? "h-24" : "h-20")}
+          {showPiano && pianoKeyboard(isFullscreen ? "h-14 sm:h-20" : "h-20")}
           <div
             ref={scrollRef}
             className={`relative overflow-x-auto overflow-y-hidden cursor-pointer ${isFullscreen ? "flex-1 border-0" : "rounded-lg border border-slate-700/50"}`}
