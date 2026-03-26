@@ -11109,7 +11109,7 @@
     <!--========================= Measure 0 ==========================-->
     <measure implicit="no" number="2">
       <note>
-        <rest />
+        <rest default-y="10" />
         <duration>5040</duration>
         <voice>5</voice>
         <type>eighth</type>
@@ -11159,7 +11159,7 @@
     <!--========================= Measure 0 ==========================-->
     <measure implicit="no" number="3">
       <note>
-        <rest />
+        <rest default-y="10" />
         <duration>5040</duration>
         <voice>5</voice>
         <type>eighth</type>
@@ -11209,7 +11209,7 @@
     <!--========================= Measure 0 ==========================-->
     <measure implicit="no" number="4">
       <note>
-        <rest />
+        <rest default-y="10" />
         <duration>5040</duration>
         <voice>5</voice>
         <type>eighth</type>
@@ -11259,7 +11259,7 @@
     <!--========================= Measure 0 ==========================-->
     <measure implicit="no" number="5">
       <note>
-        <rest />
+        <rest default-y="10" />
         <duration>5040</duration>
         <voice>5</voice>
         <type>eighth</type>
@@ -11309,7 +11309,7 @@
     <!--========================= Measure 0 ==========================-->
     <measure implicit="no" number="6">
       <note>
-        <rest />
+        <rest default-y="10" />
         <duration>5040</duration>
         <voice>5</voice>
         <type>eighth</type>
@@ -11364,7 +11364,7 @@
         </key>
       </attributes>
       <note>
-        <rest />
+        <rest default-y="10" />
         <duration>5040</duration>
         <voice>5</voice>
         <type>eighth</type>
@@ -11398,7 +11398,7 @@
         </notations>
       </note>
       <note>
-        <rest />
+        <rest default-y="10" />
         <duration>5040</duration>
         <voice>5</voice>
         <type>eighth</type>
@@ -11458,7 +11458,7 @@
     <!--========================= Measure 0 ==========================-->
     <measure implicit="no" number="8">
       <note>
-        <rest />
+        <rest default-y="10" />
         <duration>5040</duration>
         <voice>5</voice>
         <type>eighth</type>
@@ -11508,7 +11508,7 @@
     <!--========================= Measure 0 ==========================-->
     <measure implicit="no" number="9">
       <note>
-        <rest />
+        <rest default-y="10" />
         <duration>5040</duration>
         <voice>5</voice>
         <type>eighth</type>
@@ -11558,7 +11558,7 @@
     <!--========================= Measure 0 ==========================-->
     <measure implicit="no" number="10">
       <note>
-        <rest />
+        <rest default-y="10" />
         <duration>5040</duration>
         <voice>5</voice>
         <type>eighth</type>
@@ -11608,7 +11608,7 @@
     <!--========================= Measure 0 ==========================-->
     <measure implicit="no" number="11">
       <note>
-        <rest />
+        <rest default-y="10" />
         <duration>5040</duration>
         <voice>5</voice>
         <type>eighth</type>
@@ -11663,7 +11663,7 @@
         </key>
       </attributes>
       <note>
-        <rest />
+        <rest default-y="10" />
         <duration>5040</duration>
         <voice>5</voice>
         <type>eighth</type>
@@ -11709,7 +11709,7 @@
         <voice>6</voice>
         <type>whole</type>
         <notations>
-          <fermata type="upright" />
+          <fermata type="upright" default-y="20" />
         </notations>
       </note>
     </measure>
