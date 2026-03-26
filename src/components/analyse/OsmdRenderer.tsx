@@ -692,7 +692,7 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
           background: #020617;
           padding-left: env(safe-area-inset-left, 0px);
           padding-right: env(safe-area-inset-right, 0px);
-          padding-top: env(safe-area-inset-top, 0px);
+          padding-top: calc(25px + env(safe-area-inset-top, 0px));
           padding-bottom: env(safe-area-inset-bottom, 0px);
           overflow: hidden;
         }
