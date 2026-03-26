@@ -368,23 +368,31 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [musicXml, fromMeasure, toMeasure]);
 
-  // Click handler for notes
+  // Click/tap handler for notes — works with CSS-scaled SVG
   const handleNoteClick = useCallback((e: Event) => {
     const mouseEvent = e as MouseEvent;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const osmd = osmdRef.current as any;
     if (!osmd) return;
-    const target = mouseEvent.target as Element;
-    if (!target) return;
     try {
-      const svgEl = containerRef.current?.querySelector("svg");
+      const svgEl = containerRef.current?.querySelector("svg") as SVGSVGElement | null;
       if (!svgEl) return;
-      const pt = svgEl.createSVGPoint();
-      pt.x = mouseEvent.clientX;
-      pt.y = mouseEvent.clientY;
-      const svgPt = pt.matrixTransform(svgEl.getScreenCTM()?.inverse());
+
+      // Get the SVG's bounding rect (accounts for CSS transform: scale())
+      const svgRect = svgEl.getBoundingClientRect();
+      const svgW = parseFloat(svgEl.getAttribute("width") || "1");
+      const svgH = parseFloat(svgEl.getAttribute("height") || "1");
+      // Calculate the actual scale factor from CSS transform
+      const scaleX = svgRect.width / svgW;
+      const scaleY = svgRect.height / svgH;
+      // Convert screen coordinates to SVG coordinates, accounting for CSS scale
+      const svgX = (mouseEvent.clientX - svgRect.left) / scaleX;
+      const svgY = (mouseEvent.clientY - svgRect.top) / scaleY;
+
       const clickedMidi = new Set<number>();
-      const tolerance = 8;
+      // Scale tolerance inversely with zoom — smaller notes need bigger hit area
+      const baseTolerance = 12;
+      const tolerance = baseTolerance / Math.min(scaleX, scaleY, 1);
       for (const musicPage of osmd.GraphicSheet.MusicPages) {
         for (const system of musicPage.MusicSystems) {
           for (const staffLine of system.StaffLines) {
@@ -397,7 +405,7 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
                     if (!absPos) continue;
                     const noteX = absPos.x * 10;
                     const noteY = absPos.y * 10;
-                    if (Math.abs(noteX - svgPt.x) < tolerance * 3 && Math.abs(noteY - svgPt.y) < tolerance) {
+                    if (Math.abs(noteX - svgX) < tolerance * 3 && Math.abs(noteY - svgY) < tolerance) {
                       const halfTone = gNote.sourceNote?.halfTone;
                       if (halfTone !== undefined) clickedMidi.add(halfTone + 12);
                     }
@@ -684,7 +692,7 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
         .fs-dialog::backdrop { background: #020617; }
       `}</style>
       <div ref={wrapperRef}>
-        <div ref={playerRef} className={`${isFullscreen ? "bg-slate-950 flex flex-col w-full h-full p-1 gap-1" : "space-y-2"}`}>
+        <div ref={playerRef} className={`${isFullscreen ? "bg-slate-950 flex flex-col w-full h-full p-0.5 gap-0.5" : "space-y-2"}`}>
           {controlsBar()}
           {showPiano && pianoKeyboard(isFullscreen ? "h-14 sm:h-20" : "h-20")}
           <div
