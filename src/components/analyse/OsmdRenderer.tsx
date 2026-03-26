@@ -482,13 +482,22 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [calcMsPerMeasure]);
 
+  // Track the visual offset of the playline within the viewport when pausing
+  const lineViewOffsetRef = useRef<number | null>(null);
+
   // Pause: stop animation but keep playline visible and remember position
   const pausePlayback = useCallback(() => {
     playingRef.current = false;
     if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
     setPlaying(false);
     setActiveNotes(new Set());
-    // playbackRef and playline position are preserved
+    // Remember where the line sits relative to the viewport
+    const line = playlineRef.current;
+    const scroll = scrollRef.current;
+    if (line && scroll) {
+      const lineX = parseFloat(line.style.left) || 0;
+      lineViewOffsetRef.current = lineX - scroll.scrollLeft;
+    }
   }, []);
 
   // Full stop: hide playline and reset position
@@ -512,21 +521,28 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
       playingRef.current = true;
       setPlaying(true);
 
-      if (playbackRef.current) {
-        // Resume from paused position — adjust measureStartTime so elapsed time is correct
-        const pb = playbackRef.current;
-        const measure = measures[pb.measureIndex];
-        if (measure) {
-          // Calculate how far into the measure we were based on playline position
-          const line = playlineRef.current;
-          const lineX = line ? parseFloat(line.style.left) : measure.startX;
-          const progress = (lineX - measure.startX) / (measure.endX - measure.startX);
-          const msPerMeasure = calcMsPerMeasure();
-          // Set start time in the past so elapsed = progress * msPerMeasure
-          pb.measureStartTime = performance.now() - progress * msPerMeasure;
-          pb.msPerMeasure = msPerMeasure;
+      // Read current playline X to determine resume position
+      const line = playlineRef.current;
+      const lineX = line ? parseFloat(line.style.left) || 0 : 0;
+      lineViewOffsetRef.current = null; // stop scroll-tracking
+
+      if (playbackRef.current && lineX > 0) {
+        // Find which measure the playline is now in (may have moved via scrolling)
+        let mIdx = playbackRef.current.measureIndex;
+        for (let i = 0; i < measures.length; i++) {
+          if (lineX >= measures[i].startX && lineX <= measures[i].endX) { mIdx = i; break; }
         }
-      } else {
+        const measure = measures[mIdx];
+        if (measure) {
+          const progress = Math.max(0, Math.min(1, (lineX - measure.startX) / (measure.endX - measure.startX)));
+          const msPerMeasure = calcMsPerMeasure();
+          playbackRef.current = {
+            measureIndex: mIdx,
+            measureStartTime: performance.now() - progress * msPerMeasure,
+            msPerMeasure,
+          };
+        }
+      } else if (!playbackRef.current) {
         // Fresh start from beginning
         playbackRef.current = {
           measureIndex: 0,
@@ -540,7 +556,27 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
     }
   }, [playing, pausePlayback, calcMsPerMeasure, animateFrame]);
 
+  // When paused, move the playline with the scroll so the user can reposition
+  useEffect(() => {
+    const scroll = scrollRef.current;
+    if (!scroll) return;
+    const handleScroll = () => {
+      // Only move playline when paused (not playing) and line is visible
+      if (playingRef.current) return;
+      const offset = lineViewOffsetRef.current;
+      if (offset === null) return;
+      const line = playlineRef.current;
+      if (!line || line.style.display === "none") return;
+      // Keep line at the same visual position relative to the viewport
+      const newX = scroll.scrollLeft + offset;
+      line.style.left = `${newX}px`;
+    };
+    scroll.addEventListener("scroll", handleScroll);
+    return () => scroll.removeEventListener("scroll", handleScroll);
+  }, []);
+
   const resetPlayback = useCallback(() => {
+    lineViewOffsetRef.current = null;
     stopPlayback();
     if (scrollRef.current) scrollRef.current.scrollTo({ left: 0, behavior: "smooth" });
     setClickedNotes(new Set());
