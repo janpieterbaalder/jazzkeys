@@ -28,18 +28,22 @@ export interface AkkoordAnalyse {
 }
 
 export interface NootData {
-  noot: string;
-  duur: string;
-  beatPositie: number;
+  noot: string; // "C4", "Bb3", etc. Bij rust: "rust"
+  type: "noot" | "rust";
+  duur: string; // heel, half, kwart, achtste, zestiende + _met_punt
+  beatPositie: number; // 1, 1.5, 2, etc.
   hand: "rechts" | "links";
-  balkPositie: string;
+  stem: "omhoog" | "omlaag"; // stem-richting (voor meerdere stemmen)
+  balkPositie: string; // uitleg positie op de balk
   uitleg: string;
+  verbinding?: "overbinding" | "legatoboog"; // tie/slur naar volgende noot
 }
 
 export interface MaatData {
   maatNummer: number;
   noten: NootData[];
   akkoord?: string;
+  dynamiek?: string; // p, f, mf, etc.
 }
 
 export interface Fragment {
@@ -101,77 +105,83 @@ export async function analyseerPdf(
           },
           {
             type: "text",
-            text: `Analyseer deze bladmuziek. Knip het stuk op in fragmenten van 2-4 maten. Het doel is de leerling te helpen noten leren lezen — niet het stuk uit het hoofd leren.
+            text: `Analyseer deze bladmuziek NOOT VOOR NOOT. Focus op de EERSTE 4 MATEN en analyseer die perfect. Daarna de rest in fragmenten van 2-4 maten.
 
-BELANGRIJK: Per fragment moet je een "maatNoten" array meegeven met per maat elke individuele noot als gestructureerd object. Gebruik wetenschappelijke nootnotatie (C4 = midden-C). Dit is essentieel zodat de leerling op elke noot kan klikken om te zien waar deze op het keyboard zit.
+Het doel is dat wij de bladmuziek exact kunnen NARENDEREN als interactieve notenbalk. Elke noot, rust, overbinding en dynamiek-aanduiding moet aanwezig zijn.
 
-Geef je antwoord als JSON in dit formaat:
+## KRITIEKE REGELS VOOR NOTENANALYSE
+
+1. **ELKE noot en rust telt mee** — als er een kwartrust staat op beat 1, moet die als object in de array staan met type "rust"
+2. **Meerdere stemmen per balk**: Als er noten met stokken OMHOOG en OMLAAG op dezelfde balk staan, zijn dat verschillende stemmen. Stem "omhoog" = bovenste stem, "omlaag" = onderste stem
+3. **Exacte beat-posities**: Kwart op beat 1 = beatPositie 1. Achtste op de "en" van beat 2 = beatPositie 2.5. Tel nauwkeurig!
+4. **Overbindingen (ties)**: Als een noot via een boog verbonden is met dezelfde noot in de volgende maat → verbinding: "overbinding"
+5. **Puntnoten**: Een halve noot met punt = "half_met_punt" (duurt 3 tellen). Kwart met punt = "kwart_met_punt" (duurt 1.5 tellen)
+6. **Octaafnummers**: C4 = midden-C. B3 = de B net onder midden-C. C3 = een octaaf onder midden-C. Controleer elk octaafnummer twee keer!
+7. **Dynamiek**: Noteer p, f, mf etc. in het dynamiek veld van de maat waar het staat
+
+## NOOT NOTATIE
+Gebruik # voor kruis (F#4), b voor mol (Bb3, Eb4). Stamtonen: C D E F G A B.
+
+## JSON FORMAAT
+
 {
-  "stukInfo": {
-    "titel": "...",
-    "toonsoort": "...",
-    "maatsoort": "...",
-    "tempo": "...",
-    "moeilijkheidsgraad": "beginner|gemiddeld|gevorderd"
-  },
-  "fragmenten": [
-    {
-      "nummer": 1,
-      "maten": "1-4",
-      "beschrijving": "...",
-      "notenUitleg": {
-        "rechterhand": "Leg per noot uit: welke noot, waar op de balk, hoe herken je hem...",
-        "linkerhand": "Idem voor de linkerhand..."
-      },
-      "leesStrategie": "Tips om patronen te herkennen (intervallen, stapsgewijs, sprongen)...",
-      "ritmeUitleg": "Uitleg van het ritme en de maatsoort...",
-      "akkoordAnalyse": {
-        "akkoorden": ["Cmaj7", "Am7"],
-        "uitleg": "Welke noten vormen welk akkoord en waarom...",
-        "jazzVarianten": ["Cmaj9", "Am9"],
-        "voicingSuggesties": "Hoe je deze akkoorden als jazz voicings kunt spelen..."
-      },
-      "oefentip": "Concrete oefenstrategie voor dit fragment...",
-      "jazzTip": "Hoe je dit fragment in jazz-stijl kunt spelen...",
-      "maatNoten": [
+  "stukInfo": { "titel": "...", "toonsoort": "...", "maatsoort": "...", "tempo": "...", "moeilijkheidsgraad": "beginner|gemiddeld|gevorderd" },
+  "fragmenten": [{
+    "nummer": 1,
+    "maten": "1-4",
+    "beschrijving": "...",
+    "notenUitleg": { "rechterhand": "...", "linkerhand": "..." },
+    "leesStrategie": "...",
+    "ritmeUitleg": "...",
+    "akkoordAnalyse": { "akkoorden": ["Cmaj7"], "uitleg": "...", "jazzVarianten": ["Cmaj9"], "voicingSuggesties": "..." },
+    "oefentip": "...",
+    "jazzTip": "...",
+    "maatNoten": [{
+      "maatNummer": 1,
+      "akkoord": "Cmaj7",
+      "dynamiek": "p",
+      "noten": [
         {
-          "maatNummer": 1,
-          "akkoord": "Cmaj7",
-          "noten": [
-            {
-              "noot": "C4",
-              "duur": "kwart",
-              "beatPositie": 1,
-              "hand": "rechts",
-              "balkPositie": "hulplijn onder de G-sleutel",
-              "uitleg": "Dit is midden-C, de noot op de hulplijn net onder de notenbalk van de G-sleutel"
-            },
-            {
-              "noot": "E4",
-              "duur": "kwart",
-              "beatPositie": 2,
-              "hand": "rechts",
-              "balkPositie": "eerste lijn van de G-sleutel",
-              "uitleg": "De E zit op de eerste (onderste) lijn van de G-sleutel"
-            },
-            {
-              "noot": "C3",
-              "duur": "half",
-              "beatPositie": 1,
-              "hand": "links",
-              "balkPositie": "derde ruimte van de F-sleutel",
-              "uitleg": "Deze C zit een octaaf onder midden-C, in de derde ruimte van de F-sleutel"
-            }
-          ]
+          "noot": "rust",
+          "type": "rust",
+          "duur": "kwart",
+          "beatPositie": 1,
+          "hand": "rechts",
+          "stem": "omhoog",
+          "balkPositie": "",
+          "uitleg": "Kwartrust op tel 1 in de rechterhand"
+        },
+        {
+          "noot": "E5",
+          "type": "noot",
+          "duur": "kwart",
+          "beatPositie": 2,
+          "hand": "rechts",
+          "stem": "omhoog",
+          "balkPositie": "vierde ruimte G-sleutel",
+          "uitleg": "E op de vierde ruimte van de G-sleutel"
+        },
+        {
+          "noot": "D4",
+          "type": "noot",
+          "duur": "half_met_punt",
+          "beatPositie": 1,
+          "hand": "rechts",
+          "stem": "omlaag",
+          "balkPositie": "net onder de eerste lijn G-sleutel",
+          "uitleg": "D net onder de G-sleutel balk, onderste stem"
         }
       ]
-    }
-  ]
+    }]
+  }]
 }
 
-Geef ELKE noot die je kunt lezen in de bladmuziek als apart object in de maatNoten array. Wees zo compleet mogelijk.
-
-Geef ALLEEN geldige JSON terug, geen andere tekst.`,
+BELANGRIJK:
+- Het voorbeeld hierboven is FICTIEF — lees de WERKELIJKE noten uit de PDF!
+- Geef ELKE noot en rust die op de bladmuziek staat
+- Bij meerdere stemmen per balk: gebruik "stem": "omhoog" voor de bovenste stem en "stem": "omlaag" voor de onderste stem
+- Controleer dat de totale duur van ELKE stem in een maat klopt met de maatsoort (bijv. 4 tellen bij 4/4)
+- Geef ALLEEN geldige JSON terug`,
           },
         ],
       },

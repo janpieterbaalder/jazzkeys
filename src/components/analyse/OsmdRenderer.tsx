@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
+import { normalizePianoXml } from "@/lib/xml-utils";
 
 interface OsmdRendererProps {
   musicXml: string;
@@ -23,11 +24,6 @@ interface MeasurePos {
   width: number;
 }
 
-// Preprocess MusicXML: only fix non-standard clef lines from Audiveris
-function preprocessMusicXml(xml: string): string {
-  return xml.replace(/<sign>G<\/sign>(\s*)<line>3<\/line>/g, "<sign>G</sign>$1<line>2</line>");
-}
-
 function buildPianoKeys(): PianoKey[] {
   const whiteNotes = ["C", "D", "E", "F", "G", "A", "B"];
   const blackAfter = new Set(["C", "D", "F", "G", "A"]);
@@ -46,9 +42,9 @@ function buildPianoKeys(): PianoKey[] {
 
 const PIANO_KEYS = buildPianoKeys();
 
-// Post-render fix: move displaced voice-2 rests in non-treble staves back to correct staff position.
-// OSMD/VexFlow displaces voice-2 rests by voice-index, pushing them off the staff.
-// We find them via OSMD's GraphicSheet and adjust the corresponding SVG paths.
+// Post-render fix: move secondary-voice rests to the top line of their staff.
+// OSMD/VexFlow displaces voice-2 rests downward to avoid collision with voice-1,
+// but musically they should sit on the top staff line (like the original score).
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function fixDisplacedRests(osmd: any, svgEl: SVGSVGElement) {
   const gs = osmd.GraphicSheet;
@@ -57,14 +53,12 @@ function fixDisplacedRests(osmd: any, svgEl: SVGSVGElement) {
   for (const page of gs.MusicPages) {
     for (const system of page.MusicSystems) {
       for (let sIdx = 0; sIdx < system.StaffLines.length; sIdx++) {
-        // Only fix non-first staves (bass, etc.) — treble rests are usually fine
-        if (sIdx === 0) continue;
         const staffLine = system.StaffLines[sIdx];
         const staffY = staffLine.PositionAndShape?.AbsolutePosition?.y;
         if (staffY == null) continue;
 
-        // Target: slightly above middle of staff (staffY + 2 = middle line)
-        const targetRestY = staffY + 1.5;
+        // Target: top line of the staff (staffY + 0 in OSMD units)
+        const targetRestY = staffY;
 
         for (const measure of staffLine.Measures) {
           for (const entry of measure.staffEntries) {
@@ -82,8 +76,8 @@ function fixDisplacedRests(osmd: any, svgEl: SVGSVGElement) {
                 const abs = gNote.PositionAndShape?.AbsolutePosition;
                 if (!abs) continue;
 
-                // Skip if rest is already on or near the staff (within 1 unit tolerance)
-                if (Math.abs(abs.y - targetRestY) < 1.5) continue;
+                // Skip if rest is already at the top line (within 0.3 units)
+                if (Math.abs(abs.y - targetRestY) < 0.3) continue;
 
                 const deltaPixels = (targetRestY - abs.y) * 10;
                 const pixelX = abs.x * 10;
@@ -243,7 +237,7 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
           drawFingerings: false,
           drawLyrics: false,
           drawSlurs: true,
-          alignRests: 2, // 2 = always align rests to center of staff
+          // No alignRests — OSMD default positioning works for treble staff
           followCursor: false,
           cursorsOptions: [{ type: 0, color: "#3b82f600", alpha: 0 }],
           ...(fromMeasure !== undefined && { drawFromMeasureNumber: fromMeasure }),
@@ -251,14 +245,14 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
         };
 
         const osmd = new OpenSheetMusicDisplay(containerRef.current, options);
-        // Preprocess XML before loading to fix rest positions and voice numbers
-        const processedXml = preprocessMusicXml(musicXml);
-        await osmd.load(processedXml);
+        // Normalize XML structure (merge split piano parts, fix measure numbers, clef lines)
+        const normalizedXml = normalizePianoXml(musicXml);
+        await osmd.load(normalizedXml);
         osmd.render();
 
         if (scrollRef.current) scrollRef.current.scrollLeft = 0;
 
-        // Post-render: fix displaced rests and extract measure positions
+        // Post-render: fix displaced bass rests and extract measure positions
         const svgEl = containerRef.current.querySelector("svg");
         if (svgEl) {
           fixDisplacedRests(osmd, svgEl);
