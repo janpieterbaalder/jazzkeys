@@ -187,76 +187,60 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
     msPerMeasure: number;
   } | null>(null);
 
-  // Fullscreen handling
-  useEffect(() => {
-    const handleFsChange = () => {
-      const native = !!document.fullscreenElement;
-      const fake = playerRef.current?.classList.contains("fake-fullscreen");
-      setIsFullscreen(native || !!fake);
-    };
-    document.addEventListener("fullscreenchange", handleFsChange);
-    document.addEventListener("webkitfullscreenchange", handleFsChange);
+  // Fullscreen via <dialog> — works on all browsers including iOS Safari.
+  // The player DOM node is moved into the dialog when entering fullscreen,
+  // and moved back when exiting. This preserves the OSMD-rendered SVG.
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null);
 
-    // Mobile back-button support: push a history entry when entering fullscreen,
-    // so the hardware back button exits fullscreen instead of navigating away.
+  const enterFullscreen = useCallback(() => {
+    const dialog = dialogRef.current;
+    const player = playerRef.current;
+    if (!dialog || !player) return;
+    dialog.appendChild(player);
+    dialog.showModal();
+    setIsFullscreen(true);
+    history.pushState({ fullscreen: true }, "");
+    try { screen.orientation?.lock?.("landscape").catch(() => {}); } catch {}
+  }, []);
+
+  const exitFullscreen = useCallback(() => {
+    const dialog = dialogRef.current;
+    const player = playerRef.current;
+    const wrapper = wrapperRef.current;
+    if (!player || !wrapper) return;
+    dialog?.close();
+    wrapper.appendChild(player);
+    setIsFullscreen(false);
+    try { screen.orientation?.unlock?.(); } catch {}
+  }, []);
+
+  // Handle dialog close (Escape key) and mobile back-button
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+
+    const handleClose = () => {
+      const player = playerRef.current;
+      const wrapper = wrapperRef.current;
+      if (player && wrapper) wrapper.appendChild(player);
+      setIsFullscreen(false);
+      try { screen.orientation?.unlock?.(); } catch {}
+    };
+    dialog.addEventListener("close", handleClose);
+
     const handlePopState = () => {
-      const fake = playerRef.current?.classList.contains("fake-fullscreen");
-      if (fake || document.fullscreenElement) {
-        playerRef.current?.classList.remove("fake-fullscreen");
-        if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-        setIsFullscreen(false);
-        try { screen.orientation?.unlock?.(); } catch {}
+      if (dialog.open) {
+        dialog.close();
+        // handleClose fires automatically via the close event
       }
     };
     window.addEventListener("popstate", handlePopState);
 
     return () => {
-      document.removeEventListener("fullscreenchange", handleFsChange);
-      document.removeEventListener("webkitfullscreenchange", handleFsChange);
+      dialog.removeEventListener("close", handleClose);
       window.removeEventListener("popstate", handlePopState);
     };
-  }, []);
-
-  const enterFullscreen = useCallback(() => {
-    const el = playerRef.current;
-    if (!el) return;
-
-    const useFake = () => {
-      el.classList.add("fake-fullscreen");
-      setIsFullscreen(true);
-      // Push history entry so mobile back-button exits fullscreen
-      history.pushState({ fullscreen: true }, "");
-      // Lock to landscape on mobile if supported
-      try { screen.orientation?.lock?.("landscape").catch(() => {}); } catch {}
-    };
-
-    // On mobile browsers (especially iOS), requestFullscreen on divs is
-    // unsupported or blocked. Detect and go straight to fake-fullscreen.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-    if (isIOS) {
-      useFake();
-      return;
-    }
-
-    if (el.requestFullscreen) {
-      el.requestFullscreen().catch(useFake);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } else if ((el as any).webkitRequestFullscreen) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (el as any).webkitRequestFullscreen();
-    } else {
-      useFake();
-    }
-  }, []);
-
-  const exitFullscreen = useCallback(() => {
-    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    else if ((document as any).webkitExitFullscreen) (document as any).webkitExitFullscreen();
-    playerRef.current?.classList.remove("fake-fullscreen");
-    setIsFullscreen(false);
-    try { screen.orientation?.unlock?.(); } catch {}
   }, []);
 
   // Keep speedRef in sync
@@ -489,11 +473,6 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
     setClickedNotes(new Set());
   }, [stopPlayback]);
 
-  const stopAndExit = useCallback(() => {
-    stopPlayback();
-    if (scrollRef.current) scrollRef.current.scrollLeft = 0;
-    exitFullscreen();
-  }, [stopPlayback, exitFullscreen]);
 
   if (error) {
     return (
@@ -546,32 +525,30 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
   );
 
   const controlsBar = () => (
-    <div className="flex items-center gap-2 flex-wrap">
-      {isFullscreen && (
-        <button onClick={stopAndExit} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white text-sm font-medium transition-colors">
-          <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M6 6h12v12H6z" /></svg>
-          Stop
-        </button>
-      )}
-      <button onClick={togglePlay} disabled={loading} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium disabled:opacity-50 transition-colors">
+    <div className="flex items-center gap-1.5 flex-wrap px-1">
+      <button onClick={togglePlay} disabled={loading} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium disabled:opacity-50 transition-colors">
         {playing ? (
           <><svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" /></svg>Pauze</>
         ) : (
           <><svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>Afspelen</>
         )}
       </button>
-      <button onClick={resetPlayback} disabled={loading} className="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 text-sm disabled:opacity-50 transition-colors">
+      <button onClick={resetPlayback} disabled={loading} className="px-2.5 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 text-sm disabled:opacity-50 transition-colors">
         Reset
       </button>
-      <div className="flex items-center gap-2 ml-auto">
-        <span className="text-xs text-slate-500">Snelheid:</span>
-        <input type="range" min={25} max={200} step={25} value={speed} onChange={(e) => setSpeed(Number(e.target.value))} className="w-20 h-1 accent-blue-500" />
-        <span className="text-xs text-slate-400 w-10 text-right">{speed}%</span>
+      <div className="flex items-center gap-1.5 ml-auto">
+        <span className="text-xs text-slate-500 hidden sm:inline">Snelheid:</span>
+        <input type="range" min={25} max={200} step={25} value={speed} onChange={(e) => setSpeed(Number(e.target.value))} className="w-16 h-1 accent-blue-500" />
+        <span className="text-xs text-slate-400 w-8 text-right">{speed}%</span>
       </div>
-      <button onClick={() => setShowPiano(!showPiano)} className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${showPiano ? "bg-blue-600/20 text-blue-400 border border-blue-500/30" : "bg-slate-700 hover:bg-slate-600 text-slate-300"}`}>
+      <button onClick={() => setShowPiano(!showPiano)} className={`px-2.5 py-1.5 rounded-lg text-sm transition-colors ${showPiano ? "bg-blue-600/20 text-blue-400 border border-blue-500/30" : "bg-slate-700 hover:bg-slate-600 text-slate-300"}`}>
         Piano
       </button>
-      {!isFullscreen && (
+      {isFullscreen ? (
+        <button onClick={exitFullscreen} className="px-2 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 text-sm transition-colors" title="Sluiten">
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path d="M6 18L18 6M6 6l12 12" /></svg>
+        </button>
+      ) : (
         <button onClick={enterFullscreen} disabled={loading} className="px-2 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 text-sm disabled:opacity-50 transition-colors" title="Volledig scherm">
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3" /></svg>
         </button>
@@ -583,45 +560,41 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
   return (
     <>
       <style>{`
-        .fake-fullscreen {
-          position: fixed !important;
-          top: 0 !important;
-          left: 0 !important;
-          width: 100vw !important;
-          height: 100vh !important;
-          height: 100dvh !important;
-          z-index: 99999 !important;
-          background: #020617 !important;
-          display: flex !important;
-          flex-direction: column !important;
-          padding: 4px !important;
-          gap: 4px !important;
-          overflow: hidden !important;
+        .fs-dialog {
+          padding: 0; margin: 0; border: none;
+          width: 100vw; max-width: 100vw;
+          height: 100vh; max-height: 100vh;
+          height: 100dvh; max-height: 100dvh;
+          background: #020617;
         }
+        .fs-dialog::backdrop { background: #020617; }
       `}</style>
-      <div ref={playerRef} className={`${isFullscreen ? "bg-slate-950 flex flex-col h-screen p-1 gap-1" : "space-y-2"}`}>
-        {controlsBar()}
-        {showPiano && pianoKeyboard(isFullscreen ? "h-24" : "h-20")}
-        <div
-          ref={scrollRef}
-          className={`relative overflow-x-auto overflow-y-hidden cursor-pointer ${isFullscreen ? "flex-1 border-0" : "rounded-lg border border-slate-700/50"}`}
-          style={{ minHeight: loading ? 200 : "auto" }}
-        >
-          <div ref={containerRef} />
-          {/* Playline — thin vertical red line that glides over the score at measure-tempo */}
+      <div ref={wrapperRef}>
+        <div ref={playerRef} className={`${isFullscreen ? "bg-slate-950 flex flex-col w-full h-full p-1 gap-1" : "space-y-2"}`}>
+          {controlsBar()}
+          {showPiano && pianoKeyboard(isFullscreen ? "h-24" : "h-20")}
           <div
-            ref={playlineRef}
-            className="absolute top-0 bottom-0 pointer-events-none"
-            style={{
-              display: "none",
-              width: "2px",
-              background: "linear-gradient(to bottom, transparent 5%, #ef4444 15%, #ef4444 85%, transparent 95%)",
-              zIndex: 10,
-              left: 0,
-            }}
-          />
+            ref={scrollRef}
+            className={`relative overflow-x-auto overflow-y-hidden cursor-pointer ${isFullscreen ? "flex-1 border-0" : "rounded-lg border border-slate-700/50"}`}
+            style={{ minHeight: loading ? 200 : "auto" }}
+          >
+            <div ref={containerRef} />
+            {/* Playline — thin vertical red line that glides over the score at measure-tempo */}
+            <div
+              ref={playlineRef}
+              className="absolute top-0 bottom-0 pointer-events-none"
+              style={{
+                display: "none",
+                width: "2px",
+                background: "linear-gradient(to bottom, transparent 5%, #ef4444 15%, #ef4444 85%, transparent 95%)",
+                zIndex: 10,
+                left: 0,
+              }}
+            />
+          </div>
         </div>
       </div>
+      <dialog ref={dialogRef} className="fs-dialog" />
     </>
   );
 }
