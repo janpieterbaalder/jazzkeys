@@ -453,10 +453,16 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
     line.style.left = `${currentX}px`;
     line.style.display = "block";
 
-    // Smooth scroll: keep playline at ~1/3 from left edge
+    // Smooth scroll: keep playline at ~1/3 from left edge.
+    // Only auto-scroll if the playline is near the visible area.
     const viewWidth = scroll.clientWidth;
-    const targetScroll = currentX - viewWidth / 3;
-    scroll.scrollLeft += (targetScroll - scroll.scrollLeft) * 0.06;
+    const viewLeft = scroll.scrollLeft;
+    const viewRight = viewLeft + viewWidth;
+    const lineVisible = currentX > viewLeft - 50 && currentX < viewRight + 50;
+    if (lineVisible) {
+      const targetScroll = currentX - viewWidth / 3;
+      scroll.scrollLeft += (targetScroll - scroll.scrollLeft) * 0.06;
+    }
 
     // If measure is complete, advance to next
     if (t >= 1) {
@@ -476,6 +482,16 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [calcMsPerMeasure]);
 
+  // Pause: stop animation but keep playline visible and remember position
+  const pausePlayback = useCallback(() => {
+    playingRef.current = false;
+    if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
+    setPlaying(false);
+    setActiveNotes(new Set());
+    // playbackRef and playline position are preserved
+  }, []);
+
+  // Full stop: hide playline and reset position
   const stopPlayback = useCallback(() => {
     playingRef.current = false;
     playbackRef.current = null;
@@ -487,7 +503,8 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
 
   const togglePlay = useCallback(() => {
     if (playing) {
-      stopPlayback();
+      // Pause — keep position
+      pausePlayback();
     } else {
       const measures = measuresRef.current;
       if (measures.length === 0) return;
@@ -495,18 +512,33 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
       playingRef.current = true;
       setPlaying(true);
 
-      // Start from first measure
-      playbackRef.current = {
-        measureIndex: 0,
-        measureStartTime: performance.now(),
-        msPerMeasure: calcMsPerMeasure(),
-      };
-
-      if (scrollRef.current) scrollRef.current.scrollLeft = 0;
+      if (playbackRef.current) {
+        // Resume from paused position — adjust measureStartTime so elapsed time is correct
+        const pb = playbackRef.current;
+        const measure = measures[pb.measureIndex];
+        if (measure) {
+          // Calculate how far into the measure we were based on playline position
+          const line = playlineRef.current;
+          const lineX = line ? parseFloat(line.style.left) : measure.startX;
+          const progress = (lineX - measure.startX) / (measure.endX - measure.startX);
+          const msPerMeasure = calcMsPerMeasure();
+          // Set start time in the past so elapsed = progress * msPerMeasure
+          pb.measureStartTime = performance.now() - progress * msPerMeasure;
+          pb.msPerMeasure = msPerMeasure;
+        }
+      } else {
+        // Fresh start from beginning
+        playbackRef.current = {
+          measureIndex: 0,
+          measureStartTime: performance.now(),
+          msPerMeasure: calcMsPerMeasure(),
+        };
+        if (scrollRef.current) scrollRef.current.scrollLeft = 0;
+      }
 
       rafRef.current = requestAnimationFrame(animateFrame);
     }
-  }, [playing, stopPlayback, calcMsPerMeasure, animateFrame]);
+  }, [playing, pausePlayback, calcMsPerMeasure, animateFrame]);
 
   const resetPlayback = useCallback(() => {
     stopPlayback();
