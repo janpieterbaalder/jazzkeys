@@ -221,7 +221,7 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
     dialog.showModal();
     setIsFullscreen(true);
     history.pushState({ fullscreen: true }, "");
-    try { screen.orientation?.lock?.("landscape").catch(() => {}); } catch {}
+    try { (screen.orientation as unknown as { lock?: (o: string) => Promise<void> }).lock?.("landscape").catch(() => {}); } catch {}
     // Scale score after layout settles
     requestAnimationFrame(() => requestAnimationFrame(scaleScoreToFit));
   }, [scaleScoreToFit]);
@@ -237,7 +237,7 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
     dialog?.close();
     wrapper.appendChild(player);
     setIsFullscreen(false);
-    try { screen.orientation?.unlock?.(); } catch {}
+    try { (screen.orientation as unknown as { unlock?: () => void }).unlock?.(); } catch {}
   }, []);
 
   // Handle dialog close (Escape key) and mobile back-button
@@ -253,7 +253,7 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
       if (svg) { svg.style.transform = ""; svg.style.transformOrigin = ""; }
       if (player && wrapper) wrapper.appendChild(player);
       setIsFullscreen(false);
-      try { screen.orientation?.unlock?.(); } catch {}
+      try { (screen.orientation as unknown as { unlock?: () => void }).unlock?.(); } catch {}
     };
     dialog.addEventListener("close", handleClose);
 
