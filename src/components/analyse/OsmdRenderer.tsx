@@ -193,23 +193,29 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
   const dialogRef = useRef<HTMLDialogElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
 
-  // Scale the OSMD SVG so the full grand staff fits the available height
+  // Scale the OSMD SVG so the full grand staff fits the available height.
+  // The SVG has ~65px top margin and ~75px bottom margin around the actual
+  // staff content. In fullscreen we crop these margins to use more space.
   const scaleScoreToFit = useCallback(() => {
     const scroll = scrollRef.current;
     if (!scroll) return;
-    const svg = scroll.querySelector("svg");
+    const svg = scroll.querySelector("svg") as SVGSVGElement | null;
     if (!svg) return;
     const svgH = parseFloat(svg.getAttribute("height") || "0");
     if (svgH <= 0) return;
     const availH = scroll.clientHeight;
     if (availH <= 0 || availH >= svgH) {
-      // Enough space — remove any scaling
       svg.style.transform = "";
       svg.style.transformOrigin = "";
       return;
     }
-    const scale = availH / svgH;
-    svg.style.transform = `scale(${scale})`;
+    // Crop top/bottom margins of the SVG to make the staves bigger
+    const topCrop = 50;  // px of empty space above treble staff
+    const bottomCrop = 50; // px of empty space below bass staff
+    const contentH = svgH - topCrop - bottomCrop;
+    const scale = Math.min(1, availH / contentH);
+    // Scale then shift up to hide the top margin
+    svg.style.transform = `scale(${scale}) translateY(${-topCrop}px)`;
     svg.style.transformOrigin = "top left";
   }, []);
 
@@ -390,8 +396,9 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
       const svgY = (mouseEvent.clientY - svgRect.top) / scaleY;
 
       const clickedMidi = new Set<number>();
-      // Scale tolerance inversely with zoom — smaller notes need bigger hit area
-      const baseTolerance = 12;
+      // Base hit-area in SVG units; scaled inversely with CSS zoom so taps
+      // stay accurate on small screens. Keep small to avoid overlapping neighbours.
+      const baseTolerance = 6;
       const tolerance = baseTolerance / Math.min(scaleX, scaleY, 1);
       for (const musicPage of osmd.GraphicSheet.MusicPages) {
         for (const system of musicPage.MusicSystems) {
