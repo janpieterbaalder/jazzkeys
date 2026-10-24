@@ -1,5 +1,8 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { lessons } from "@/data/lessons";
+
+export const metadata: Metadata = { title: "Lessen" };
 
 export default function LessenPage() {
   return (

@@ -4,7 +4,7 @@ import { useParams } from "next/navigation";
 import { useState } from "react";
 import Link from "next/link";
 import { VOICING_CATEGORIES } from "@/data/chords/voicing-data";
-import { ALL_ROOTS, ROOT_DISPLAY, CHORD_LABELS, type ChordType } from "@/lib/piano-utils";
+import { ALL_ROOTS, CHORD_LABELS, type ChordType } from "@/lib/piano-utils";
 import ChordCard from "@/components/akkoorden/ChordCard";
 
 export default function VoicingTypePage() {

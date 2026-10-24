@@ -15,6 +15,8 @@ const ACCEPTED_TYPES = new Set([
 ]);
 
 const ACCEPTED_EXTENSIONS = [".pdf", ".xml", ".musicxml"];
+const MAX_PDF_BYTES = 4 * 1024 * 1024;
+const MAX_XML_BYTES = 10 * 1024 * 1024;
 
 function getFileExtension(name: string): string {
   const dot = name.lastIndexOf(".");
@@ -32,16 +34,24 @@ export default function PdfUploader({ onUpload, onXmlUpload, isLoading }: PdfUpl
   const [isDragging, setIsDragging] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
   const [fileType, setFileType] = useState<"pdf" | "xml" | null>(null);
+  const [fout, setFout] = useState<string | null>(null);
 
   const handleFile = useCallback(
     (file: File) => {
       const type = isAcceptedFile(file);
+      setFout(null);
       if (!type) {
-        alert("Alleen PDF- en MusicXML-bestanden zijn toegestaan");
+        setFout("Alleen PDF- en MusicXML-bestanden (.pdf, .xml, .musicxml) zijn toegestaan.");
         return;
       }
-      if (file.size > 10 * 1024 * 1024) {
-        alert("Bestand is te groot (maximaal 10MB)");
+      // PDF gaat naar de server (hostinglimiet ~4,5 MB); XML blijft in de browser.
+      const max = type === "pdf" ? MAX_PDF_BYTES : MAX_XML_BYTES;
+      if (file.size > max) {
+        setFout(
+          type === "pdf"
+            ? "PDF is te groot (maximaal 4 MB). Upload alleen de pagina's die je wilt oefenen."
+            : "MusicXML-bestand is te groot (maximaal 10 MB)."
+        );
         return;
       }
 
@@ -55,8 +65,13 @@ export default function PdfUploader({ onUpload, onXmlUpload, isLoading }: PdfUpl
         const reader = new FileReader();
         reader.onload = () => {
           const text = reader.result as string;
+          if (!text.includes("<score-partwise")) {
+            setFout("Dit XML-bestand is geen MusicXML-partituur.");
+            return;
+          }
           onXmlUpload(text, file.name);
         };
+        reader.onerror = () => setFout("Kon het bestand niet lezen.");
         reader.readAsText(file);
       }
     },
@@ -126,6 +141,12 @@ export default function PdfUploader({ onUpload, onXmlUpload, isLoading }: PdfUpl
             PDF wordt geanalyseerd met AI — XML wordt direct weergegeven
           </p>
         </div>
+      )}
+
+      {fout && (
+        <p className="relative mt-3 text-sm text-red-400" role="alert">
+          {fout}
+        </p>
       )}
     </div>
   );

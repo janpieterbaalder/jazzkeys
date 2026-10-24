@@ -4,7 +4,8 @@
 Een webapp die beginners helpt jazz piano te leren. Gebouwd met Next.js 16 (App Router), TypeScript, Tailwind CSS v4. Dark mode design (slate-900/950 achtergrond).
 
 ## Kernfuncties
-- **Analyse**: Upload bladmuziek (PDF) → Claude analyseert → interactieve notenbalk weergave
+- **Analyse**: Upload bladmuziek (PDF) → Claude analyseert → interactieve notenbalk weergave (afspeelbaar)
+- **Bladmuziekspeler**: MusicXML via OpenSheetMusicDisplay met geluid, meelopende piano, metronoom, aftellen, hand-selectie en herhaal-modus
 - **Oefenschema**: 12-weeks stappenplan met dagelijkse oefeningen
 - **Lessen**: Theorie over intervallen, akkoorden, nummersystemen
 - **Akkoorden**: Interactief akkoorden woordenboek
@@ -18,8 +19,15 @@ De notenbalk is een SVG-gebaseerde renderer die bladmuziek nabootst:
 - `src/components/analyse/InteractieveNotenWeergave.tsx` — Scroll container + auto-scroll
 - `src/components/analyse/NotenBalkControls.tsx` — Play/pause, snelheid
 
-### Data Model (`src/lib/claude.ts`)
-De Claude API analyseert PDFs en retourneert gestructureerde `MaatData[]` per fragment.
+### Geluid & afspelen
+- `src/lib/audio.ts` — Web Audio piano-synth (geen samples) + metronoomtik. `unlockAudio()` altijd vanuit een klik/tap aanroepen.
+- `src/lib/score-timeline.ts` — Tijdlijn (noten, tellen, x-posities) in seconden. `buildOsmdTimeline` leest OSMD uit (echte duren, overbindingen, tempo, herhalingen); `buildMaatNotenTimeline` doet dit voor Claude-`MaatData`.
+- `src/lib/score-player.ts` — Lookahead-scheduler (25 ms tick, 150 ms vooruit) met snelheid, loop, aftellen, metronoom en muten per hand (part 0 = rechts, 1 = links).
+- `src/lib/osmd-svg.ts` — Maatstreep-detectie + `applyMidwayerFixes` (alleen voor Midwayer, via `renderFixes="midwayer"`).
+- `PianoKeyboard` is standaard klikbaar (speelt de noot); `PlayNotesButton` speelt een akkoord blok of gebroken.
+
+### Data Model (`src/lib/analyse-schema.ts`)
+De Claude API analyseert PDFs en retourneert gestructureerde `MaatData[]` per fragment. De Zod-schema's in `analyse-schema.ts` worden als structured output meegestuurd (gegarandeerd geldige JSON). `controleerMaten()` meldt maten waarvan de duren de maatsoort niet vullen.
 
 **NootData velden:**
 - `noot`: Wetenschappelijke notatie (C4 = midden-C, Bb3 = B-mol octaaf 3)
@@ -55,6 +63,11 @@ De Claude API analyseert PDFs en retourneert gestructureerde `MaatData[]` per fr
 - STEP = 8px per halve lijn-afstand
 - Noten worden diatonisch gepositioneerd (accidentals veranderen de Y niet)
 
+### Claude API (`src/lib/claude.ts`, server-only)
+- Model: `claude-opus-5-5` (overschrijfbaar met `CLAUDE_MODEL`), adaptive thinking, effort `high` voor PDF (`CLAUDE_PDF_EFFORT`) en `medium` voor akkoorden (`CLAUDE_AKKOORD_EFFORT`).
+- Server-side refusal-fallback aan (`fallbacks: "default"`).
+- `/api/analyse-pdf` streamt NDJSON (`progress` / `ping` / `result` / `error`), `maxDuration = 300`. PDF max 4 MB (Vercel body-limiet 4,5 MB).
+
 ### Claude PDF Analyse Prompt
 De prompt in `src/lib/claude.ts` moet **elke noot en rust** uit de bladmuziek halen met:
 - Exacte nootnaam + octaaf
@@ -84,4 +97,10 @@ De prompt in `src/lib/claude.ts` moet **elke noot en rust** uit de bladmuziek ha
 ## Dev Server
 ```bash
 cd jazzkeys && npm run dev -- --port 3000
+```
+
+## Controles
+```bash
+npm run check   # typecheck + eslint + vitest
+npm run build
 ```

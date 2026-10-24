@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { lessons, getLessonBySlug } from "@/data/lessons";
@@ -9,6 +10,12 @@ interface PageProps {
 
 export function generateStaticParams() {
   return lessons.map((lesson) => ({ slug: lesson.slug }));
+}
+
+export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
+  const { slug } = await params;
+  const lesson = getLessonBySlug(slug);
+  return lesson ? { title: lesson.title, description: lesson.description } : {};
 }
 
 export default async function LessonPage({ params }: PageProps) {

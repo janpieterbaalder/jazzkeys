@@ -4,25 +4,25 @@ const features = [
   {
     href: "/akkoorden",
     title: "Akkoorden",
-    description: "Shell voicings, rootless voicings en meer — met piano-diagrammen",
+    description: "Shell voicings en rootless voicings in alle 12 toonsoorten — klik en hoor ze",
     icon: "♫",
   },
   {
     href: "/lessen",
     title: "Lessen",
-    description: "Muziektheorie, intervallen, modi en de ii-V-I progressie",
+    description: "Muziektheorie, intervallen, modi en de ii-V-I — met afspeelbare voorbeelden",
     icon: "📖",
   },
   {
     href: "/oefenschema",
     title: "Oefenschema",
-    description: "Gestructureerde oefenplannen van beginner tot gevorderd",
+    description: "Dagelijkse oefeningen van beginner tot gevorderd — vink af en houd je reeks bij",
     icon: "📋",
   },
   {
     href: "/analyse",
     title: "Analyse",
-    description: "Upload bladmuziek en leer stap voor stap noten lezen",
+    description: "Bladmuziek afspelen met meelopende piano, metronoom en herhaal-modus — of laat AI je PDF lezen",
     icon: "🎵",
   },
 ];

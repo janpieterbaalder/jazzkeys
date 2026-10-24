@@ -1,6 +1,7 @@
 "use client";
 
 import PianoKeyboard from "@/components/piano/PianoKeyboard";
+import PlayNotesButton from "@/components/piano/PlayNotesButton";
 import {
   type ChordType,
   type VoicingType,
@@ -8,7 +9,6 @@ import {
   CHORD_SYMBOLS,
   CHORD_LABELS,
   TONE_COLORS,
-  ROOT_DISPLAY,
 } from "@/lib/piano-utils";
 
 interface ChordCardProps {
@@ -34,12 +34,15 @@ export default function ChordCard({
 
   return (
     <div className="p-4 rounded-xl border border-slate-800 bg-slate-900/30">
-      <div className="flex items-baseline gap-2 mb-1">
-        <span className="text-lg font-bold text-white">
-          {root}
-          {symbol}
-        </span>
-        <span className="text-xs text-slate-500">{label}</span>
+      <div className="flex items-start justify-between gap-2 mb-1">
+        <div className="flex items-baseline gap-2">
+          <span className="text-lg font-bold text-white">
+            {root}
+            {symbol}
+          </span>
+          <span className="text-xs text-slate-500">{label}</span>
+        </div>
+        <PlayNotesButton notes={voicing.notes} />
       </div>
       <div className="text-xs text-slate-500 mb-3">
         {voicing.notes.join(" — ")}

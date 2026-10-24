@@ -1,5 +1,8 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { VOICING_CATEGORIES } from "@/data/chords/voicing-data";
+
+export const metadata: Metadata = { title: "Akkoorden" };
 
 export default function AkkoordenPage() {
   return (

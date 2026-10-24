@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import type { MaatData, NootData } from "@/lib/claude";
+import type { MaatData, NootData } from "@/lib/analyse-schema";
 import {
   parseNootNaam,
   getStaffPosition,
@@ -18,6 +18,8 @@ interface NotenBalkProps {
   selectedNoot: NootData | null;
   onNootSelect: (noot: NootData) => void;
   maatsoort?: string;
+  /** Noten die op dit moment klinken (tijdens afspelen) */
+  actieveNoten?: ReadonlySet<NootData>;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────
@@ -401,6 +403,7 @@ export default function NotenBalk({
   selectedNoot,
   onNootSelect,
   maatsoort,
+  actieveNoten,
 }: NotenBalkProps) {
   const beatsPerMeasure = maatsoort
     ? parseInt(maatsoort.split("/")[0]) || 4
@@ -447,10 +450,11 @@ export default function NotenBalk({
   const totalHeight = 50 + SC.STAFF_HEIGHT + SC.STAFF_GAP + SC.STAFF_HEIGHT + 40;
 
   const isSelectedNoot = (noot: NootData) =>
-    selectedNoot !== null &&
-    selectedNoot.noot === noot.noot &&
-    selectedNoot.beatPositie === noot.beatPositie &&
-    selectedNoot.hand === noot.hand;
+    Boolean(actieveNoten?.has(noot)) ||
+    (selectedNoot !== null &&
+      selectedNoot.noot === noot.noot &&
+      selectedNoot.beatPositie === noot.beatPositie &&
+      selectedNoot.hand === noot.hand);
 
   // Zoek overbindingen: noten met verbinding die doorlopen naar de volgende maat
   const ties: { x1: number; y1: number; x2: number; y2: number; direction: "up" | "down" }[] = [];
@@ -565,6 +569,7 @@ export default function NotenBalk({
 
           {/* Noten en rusten */}
           {m.items.map((item, ni) => {
+            const actief = actieveNoten?.has(item.noot) ? "true" : undefined;
             if (isRust(item.noot)) {
               return (
                 <RestSymbol
@@ -578,14 +583,15 @@ export default function NotenBalk({
               );
             }
             return (
-              <NoteHead
-                key={`n-${mi}-${ni}`}
-                x={item.x}
-                y={item.y}
-                noot={item.noot}
-                isSelected={isSelectedNoot(item.noot)}
-                onClick={() => onNootSelect(item.noot)}
-              />
+              <g key={`n-${mi}-${ni}`} data-actief={actief} data-x={item.x}>
+                <NoteHead
+                  x={item.x}
+                  y={item.y}
+                  noot={item.noot}
+                  isSelected={isSelectedNoot(item.noot)}
+                  onClick={() => onNootSelect(item.noot)}
+                />
+              </g>
             );
           })}
         </g>

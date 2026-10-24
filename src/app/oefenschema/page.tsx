@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { practicePhases } from "@/data/practice-plans";
 import WeekDetailView from "@/components/oefenschema/WeekDetailView";
+import { useVoortgang } from "@/lib/use-voortgang";
 
 export default function OefenschemaPage() {
   const [selectedPhase, setSelectedPhase] = useState(0);
@@ -10,16 +11,32 @@ export default function OefenschemaPage() {
   const [expandedWeek, setExpandedWeek] = useState<number | null>(null);
 
   const phase = practicePhases[selectedPhase];
+  const { aantalGedaan, reeks, totaal } = useVoortgang();
 
   return (
     <div>
       <h1 className="text-3xl font-bold mb-2 bg-gradient-to-r from-blue-400 to-blue-600 bg-clip-text text-transparent">
         Oefenschema
       </h1>
-      <p className="text-slate-400 mb-8">
+      <p className="text-slate-400 mb-4">
         Een gestructureerd leerpad van 12 maanden — van beginner tot
         jazz-pianist. Kies je fase en volg het dagelijkse schema.
       </p>
+
+      {totaal > 0 && (
+        <div className="flex flex-wrap gap-2 mb-8 text-xs">
+          <span className="px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+            {totaal} {totaal === 1 ? "oefening" : "oefeningen"} afgevinkt
+          </span>
+          {reeks > 0 && (
+            <span className="px-2.5 py-1 rounded-lg bg-amber-500/15 text-amber-400 border border-amber-500/30">
+              {reeks} {reeks === 1 ? "dag" : "dagen"} op rij geoefend
+            </span>
+          )}
+          <span className="px-2.5 py-1 text-slate-500">Voortgang wordt in deze browser bewaard</span>
+        </div>
+      )}
+      {totaal === 0 && <div className="mb-8" />}
 
       {/* Phase selector */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-8">
@@ -164,7 +181,16 @@ export default function OefenschemaPage() {
                       {week.focus}
                     </span>
                     {week.dagen && (
-                      <span className="ml-auto flex items-center gap-1 text-xs text-blue-400">
+                      <span className="ml-auto flex items-center gap-2 text-xs text-blue-400">
+                        {(() => {
+                          const n = aantalGedaan(`f${phase.phase}|${week.week}|`);
+                          const max = week.dagen.reduce((sum, d) => sum + d.oefeningen.length, 0);
+                          return n > 0 ? (
+                            <span className={n >= max ? "text-emerald-400" : "text-slate-400"}>
+                              {n}/{max}
+                            </span>
+                          ) : null;
+                        })()}
                         {expandedWeek === i ? "Inklappen" : `${week.dagen.length} dagen`}
                         <svg
                           className={`w-3 h-3 transition-transform ${expandedWeek === i ? "rotate-180" : ""}`}
@@ -185,7 +211,7 @@ export default function OefenschemaPage() {
                 {expandedWeek === i && week.dagen && (
                   <div className="px-4 pb-4 border-t border-slate-800">
                     <div className="pt-4">
-                      <WeekDetailView dagen={week.dagen} />
+                      <WeekDetailView dagen={week.dagen} fase={phase.phase} week={week.week} />
                     </div>
                   </div>
                 )}

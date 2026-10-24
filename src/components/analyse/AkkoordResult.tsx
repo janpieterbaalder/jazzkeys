@@ -1,6 +1,6 @@
 "use client";
 
-import type { AkkoordAnalyseResult } from "@/lib/claude";
+import type { AkkoordAnalyseResult } from "@/lib/analyse-schema";
 
 interface AkkoordResultProps {
   result: AkkoordAnalyseResult;

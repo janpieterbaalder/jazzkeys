@@ -1,257 +1,219 @@
+import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
+import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
+import {
+  AkkoordAnalyseSchema,
+  PdfAnalyseSchema,
+  type AkkoordAnalyseResult,
+  type PdfAnalyseResult,
+} from "@/lib/analyse-schema";
 
-const anthropic = new Anthropic();
+export type * from "@/lib/analyse-schema";
 
-const SYSTEM_PROMPT = `Je bent een ervaren jazz piano docent die bladmuziek analyseert voor een leerling die nog niet goed noten kan lezen. Je doel is om het stuk op te knippen in kleine fragmenten (2-4 maten) en per fragment uit te leggen:
-1. Welke noten er staan en hoe je ze herkent op de balk
-2. Welke akkoorden bij deze noten horen (ook als er geen akkoordsymbolen staan)
-3. Hoe je dit fragment kunt oefenen
-4. Hoe je het in jazz-stijl kunt spelen
+const MODEL = process.env.CLAUDE_MODEL || "claude-opus-5-5";
 
-BELANGRIJK: Gebruik altijd wetenschappelijke nootnotatie met octaafnummer. Midden-C = C4. De octaaf onder midden-C = octaaf 3. Gebruik C, D, E, F, G, A, B voor stamtonen. Gebruik # voor kruis (bijv. F#4, C#3) en b voor mol (bijv. Bb3, Eb4).
-
-Antwoord ALTIJD in het Nederlands. Geef je antwoord als JSON.`;
-
-export interface StukInfo {
-  titel: string;
-  toonsoort: string;
-  maatsoort: string;
-  tempo: string;
-  moeilijkheidsgraad: "beginner" | "gemiddeld" | "gevorderd";
+type Effort = "low" | "medium" | "high" | "xhigh" | "max";
+const EFFORTS: Effort[] = ["low", "medium", "high", "xhigh", "max"];
+function effortFromEnv(name: string, fallback: Effort): Effort {
+  const value = process.env[name] as Effort | undefined;
+  return value && EFFORTS.includes(value) ? value : fallback;
 }
 
-export interface AkkoordAnalyse {
-  akkoorden: string[];
-  uitleg: string;
-  jazzVarianten: string[];
-  voicingSuggesties: string;
+// Noten lezen is precisiewerk → hoge effort. Akkoordanalyse is eenvoudiger.
+const PDF_EFFORT = effortFromEnv("CLAUDE_PDF_EFFORT", "high");
+const AKKOORD_EFFORT = effortFromEnv("CLAUDE_AKKOORD_EFFORT", "medium");
+
+/** Fouten met een boodschap die direct aan de gebruiker getoond kan worden. */
+export class AnalyseError extends Error {
+  constructor(
+    message: string,
+    public status = 500
+  ) {
+    super(message);
+  }
 }
 
-export interface NootData {
-  noot: string; // "C4", "Bb3", etc. Bij rust: "rust"
-  type: "noot" | "rust";
-  duur: string; // heel, half, kwart, achtste, zestiende + _met_punt
-  beatPositie: number; // 1, 1.5, 2, etc.
-  hand: "rechts" | "links";
-  stem: "omhoog" | "omlaag"; // stem-richting (voor meerdere stemmen)
-  balkPositie: string; // uitleg positie op de balk
-  uitleg: string;
-  verbinding?: "overbinding" | "legatoboog"; // tie/slur naar volgende noot
+let client: Anthropic | null = null;
+const GEEN_SLEUTEL =
+  "Er is geen Claude API-sleutel ingesteld (ANTHROPIC_API_KEY). MusicXML-bestanden werken wel zonder sleutel.";
+
+function getClient(): Anthropic {
+  const { ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_PROFILE } = process.env;
+  if (!ANTHROPIC_API_KEY && !ANTHROPIC_AUTH_TOKEN && !ANTHROPIC_PROFILE) {
+    throw new AnalyseError(GEEN_SLEUTEL, 503);
+  }
+  if (!client) {
+    try {
+      client = new Anthropic();
+    } catch {
+      throw new AnalyseError(GEEN_SLEUTEL, 503);
+    }
+  }
+  return client;
 }
 
-export interface MaatData {
-  maatNummer: number;
-  noten: NootData[];
-  akkoord?: string;
-  dynamiek?: string; // p, f, mf, etc.
+/** Zet SDK-fouten om naar een Nederlandse melding met passende HTTP-status. */
+export function toAnalyseError(error: unknown): AnalyseError {
+  if (error instanceof AnalyseError) return error;
+  if (error instanceof Anthropic.AuthenticationError) {
+    return new AnalyseError("De Claude API-sleutel is ongeldig of ontbreekt.", 503);
+  }
+  if (error instanceof Anthropic.RateLimitError) {
+    return new AnalyseError("Te veel aanvragen tegelijk. Probeer het over een minuut opnieuw.", 429);
+  }
+  if (error instanceof Anthropic.BadRequestError) {
+    return new AnalyseError(`Claude kon dit verzoek niet verwerken: ${error.message}`, 400);
+  }
+  if (error instanceof Anthropic.APIConnectionError) {
+    return new AnalyseError("Geen verbinding met Claude. Controleer de internetverbinding.", 502);
+  }
+  if (error instanceof Anthropic.APIError) {
+    return new AnalyseError(`Claude gaf een fout (${error.status ?? "onbekend"}). Probeer het later opnieuw.`, 502);
+  }
+  return new AnalyseError(error instanceof Error ? error.message : "Onbekende fout", 500);
 }
 
-export interface Fragment {
-  nummer: number;
-  maten: string;
-  beschrijving: string;
-  notenUitleg: {
-    rechterhand: string;
-    linkerhand: string;
-  };
-  leesStrategie: string;
-  ritmeUitleg: string;
-  akkoordAnalyse: AkkoordAnalyse;
-  oefentip: string;
-  jazzTip: string;
-  maatNoten?: MaatData[];
+function checkStop(stopReason: string | null | undefined) {
+  if (stopReason === "refusal") {
+    throw new AnalyseError("Claude heeft deze analyse geweigerd. Probeer een ander bestand.", 422);
+  }
+  if (stopReason === "max_tokens") {
+    throw new AnalyseError(
+      "Het stuk is te lang om in één keer te analyseren. Upload een kortere PDF (bijv. de eerste pagina).",
+      413
+    );
+  }
 }
 
-export interface PdfAnalyseResult {
-  stukInfo: StukInfo;
-  fragmenten: Fragment[];
-}
+const SYSTEM_PROMPT = `Je bent een ervaren jazzpianodocent die bladmuziek analyseert voor een leerling die nog niet vlot noten leest. Je knipt het stuk op in kleine fragmenten (2-4 maten) en legt per fragment uit:
+1. welke noten er staan en hoe je ze herkent op de balk;
+2. welke akkoorden bij deze noten horen (ook als er geen akkoordsymbolen staan);
+3. hoe je het fragment oefent;
+4. hoe je het in jazzstijl kunt spelen.
 
-export interface AkkoordAnalyseResult {
-  toonsoort: string;
-  analyse: {
-    akkoord: string;
-    functie: string;
-    uitleg: string;
-  }[];
-  voicingSuggesties: {
-    akkoord: string;
-    shell: string;
-    rootlessA: string;
-    rootlessB: string;
-  }[];
-  oefenplan: string[];
-  jazzVariaties: string[];
+Nootnamen altijd in wetenschappelijke notatie met octaaf: midden-C = C4, de B daaronder = B3. Gebruik # voor kruis (F#4) en b voor mol (Bb3). Schrijf alle uitleg in het Nederlands.`;
+
+const PDF_INSTRUCTIE = `Analyseer deze bladmuziek noot voor noot. Het resultaat wordt teruggerenderd als interactieve notenbalk én afgespeeld, dus elke noot, rust, overbinding en dynamiek moet kloppen.
+
+Werkwijze:
+- Lees de eerste 4 maten met extra zorg; daarna de rest in fragmenten van 2-4 maten.
+- Neem ELKE noot én ELKE rust op. Een kwartrust op tel 1 is een object met type "rust" en noot "rust".
+- Staan er op één balk noten met stokken omhoog én omlaag, dan zijn dat twee stemmen: "omhoog" (bovenste) en "omlaag" (onderste). Geef elke stem zijn eigen rusten.
+- beatPositie telt in de eenheid van de maatsoort: kwart op tel 1 = 1, achtste op de "en" van tel 2 = 2.5.
+- Puntnoten: half_met_punt = 3 tellen (in 4/4), kwart_met_punt = 1,5 tel.
+- Noot met een boog naar dezelfde toonhoogte (ook over de maatstreep): verbinding "overbinding" op de eerste noot. Een boog tussen verschillende noten: "legatoboog".
+- Akkoordnoten (meerdere noten op één stok) krijgen dezelfde beatPositie.
+- Controleer elk octaafnummer: hulplijnen tellen, G-sleutel onderste lijn = E4, F-sleutel bovenste lijn = A3.
+- Controleer per maat, per hand en per stem dat de duren samen precies de maatsoort vullen.
+- Noteer dynamiek (p, mf, f, ...) in de maat waar die staat.`;
+
+export interface PdfProgress {
+  fase: "lezen" | "schrijven";
+  /** Hoogste maatnummer dat al in de uitvoer staat */
+  maat: number;
 }
 
 export async function analyseerPdf(
-  pdfBase64: string
+  pdfBase64: string,
+  onProgress?: (p: PdfProgress) => void
 ): Promise<PdfAnalyseResult> {
-  const message = await anthropic.messages.create({
-    model: "claude-sonnet-4-20250514",
-    max_tokens: 16384,
-    system: SYSTEM_PROMPT,
-    messages: [
-      {
-        role: "user",
-        content: [
-          {
-            type: "document",
-            source: {
-              type: "base64",
-              media_type: "application/pdf",
-              data: pdfBase64,
+  try {
+    const stream = getClient().beta.messages.stream({
+      model: MODEL,
+      max_tokens: 64000,
+      betas: ["server-side-fallback-2026-07-01"],
+      fallbacks: "default",
+      thinking: { type: "adaptive" },
+      output_config: { effort: PDF_EFFORT, format: betaZodOutputFormat(PdfAnalyseSchema) },
+      system: SYSTEM_PROMPT,
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "document",
+              source: { type: "base64", media_type: "application/pdf", data: pdfBase64 },
             },
-          },
-          {
-            type: "text",
-            text: `Analyseer deze bladmuziek NOOT VOOR NOOT. Focus op de EERSTE 4 MATEN en analyseer die perfect. Daarna de rest in fragmenten van 2-4 maten.
-
-Het doel is dat wij de bladmuziek exact kunnen NARENDEREN als interactieve notenbalk. Elke noot, rust, overbinding en dynamiek-aanduiding moet aanwezig zijn.
-
-## KRITIEKE REGELS VOOR NOTENANALYSE
-
-1. **ELKE noot en rust telt mee** — als er een kwartrust staat op beat 1, moet die als object in de array staan met type "rust"
-2. **Meerdere stemmen per balk**: Als er noten met stokken OMHOOG en OMLAAG op dezelfde balk staan, zijn dat verschillende stemmen. Stem "omhoog" = bovenste stem, "omlaag" = onderste stem
-3. **Exacte beat-posities**: Kwart op beat 1 = beatPositie 1. Achtste op de "en" van beat 2 = beatPositie 2.5. Tel nauwkeurig!
-4. **Overbindingen (ties)**: Als een noot via een boog verbonden is met dezelfde noot in de volgende maat → verbinding: "overbinding"
-5. **Puntnoten**: Een halve noot met punt = "half_met_punt" (duurt 3 tellen). Kwart met punt = "kwart_met_punt" (duurt 1.5 tellen)
-6. **Octaafnummers**: C4 = midden-C. B3 = de B net onder midden-C. C3 = een octaaf onder midden-C. Controleer elk octaafnummer twee keer!
-7. **Dynamiek**: Noteer p, f, mf etc. in het dynamiek veld van de maat waar het staat
-
-## NOOT NOTATIE
-Gebruik # voor kruis (F#4), b voor mol (Bb3, Eb4). Stamtonen: C D E F G A B.
-
-## JSON FORMAAT
-
-{
-  "stukInfo": { "titel": "...", "toonsoort": "...", "maatsoort": "...", "tempo": "...", "moeilijkheidsgraad": "beginner|gemiddeld|gevorderd" },
-  "fragmenten": [{
-    "nummer": 1,
-    "maten": "1-4",
-    "beschrijving": "...",
-    "notenUitleg": { "rechterhand": "...", "linkerhand": "..." },
-    "leesStrategie": "...",
-    "ritmeUitleg": "...",
-    "akkoordAnalyse": { "akkoorden": ["Cmaj7"], "uitleg": "...", "jazzVarianten": ["Cmaj9"], "voicingSuggesties": "..." },
-    "oefentip": "...",
-    "jazzTip": "...",
-    "maatNoten": [{
-      "maatNummer": 1,
-      "akkoord": "Cmaj7",
-      "dynamiek": "p",
-      "noten": [
-        {
-          "noot": "rust",
-          "type": "rust",
-          "duur": "kwart",
-          "beatPositie": 1,
-          "hand": "rechts",
-          "stem": "omhoog",
-          "balkPositie": "",
-          "uitleg": "Kwartrust op tel 1 in de rechterhand"
+            { type: "text", text: PDF_INSTRUCTIE },
+          ],
         },
-        {
-          "noot": "E5",
-          "type": "noot",
-          "duur": "kwart",
-          "beatPositie": 2,
-          "hand": "rechts",
-          "stem": "omhoog",
-          "balkPositie": "vierde ruimte G-sleutel",
-          "uitleg": "E op de vierde ruimte van de G-sleutel"
-        },
-        {
-          "noot": "D4",
-          "type": "noot",
-          "duur": "half_met_punt",
-          "beatPositie": 1,
-          "hand": "rechts",
-          "stem": "omlaag",
-          "balkPositie": "net onder de eerste lijn G-sleutel",
-          "uitleg": "D net onder de G-sleutel balk, onderste stem"
+      ],
+    });
+
+    if (onProgress) {
+      let lastMaat = -1;
+      let scanFrom = 0;
+      onProgress({ fase: "lezen", maat: 0 });
+      stream.on("text", (_delta, snapshot) => {
+        // Alleen het nieuwe stuk scannen (met wat overlap voor afgebroken matches).
+        const tail = snapshot.slice(Math.max(0, scanFrom - 24));
+        scanFrom = snapshot.length;
+        let maat = Math.max(lastMaat, 0);
+        for (const m of tail.matchAll(/"maatNummer"\s*:\s*(\d+)/g)) {
+          maat = Math.max(maat, parseInt(m[1], 10));
         }
-      ]
-    }]
-  }]
-}
-
-BELANGRIJK:
-- Het voorbeeld hierboven is FICTIEF — lees de WERKELIJKE noten uit de PDF!
-- Geef ELKE noot en rust die op de bladmuziek staat
-- Bij meerdere stemmen per balk: gebruik "stem": "omhoog" voor de bovenste stem en "stem": "omlaag" voor de onderste stem
-- Controleer dat de totale duur van ELKE stem in een maat klopt met de maatsoort (bijv. 4 tellen bij 4/4)
-- Geef ALLEEN geldige JSON terug`,
-          },
-        ],
-      },
-    ],
-  });
-
-  const text =
-    message.content[0].type === "text" ? message.content[0].text : "";
-
-  // Extract JSON from response (handle possible markdown code blocks)
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) {
-    throw new Error("Geen geldige JSON in het antwoord gevonden");
-  }
-
-  return JSON.parse(jsonMatch[0]) as PdfAnalyseResult;
-}
-
-export async function analyseerAkkoorden(
-  chords: string
-): Promise<AkkoordAnalyseResult> {
-  const message = await anthropic.messages.create({
-    model: "claude-sonnet-4-20250514",
-    max_tokens: 4096,
-    system: SYSTEM_PROMPT,
-    messages: [
-      {
-        role: "user",
-        content: `Analyseer deze akkoordprogressie: ${chords}
-
-Geef je antwoord als JSON in dit formaat:
-{
-  "toonsoort": "...",
-  "analyse": [
-    {
-      "akkoord": "Dm7",
-      "functie": "ii",
-      "uitleg": "Dit is het tweede trapsakkoord in C majeur..."
+        if (maat !== lastMaat) {
+          lastMaat = maat;
+          onProgress({ fase: "schrijven", maat });
+        }
+      });
     }
-  ],
-  "voicingSuggesties": [
-    {
-      "akkoord": "Dm7",
-      "shell": "D - F - C (root-3-7)",
-      "rootlessA": "F - A - C - E (3-5-7-9)",
-      "rootlessB": "C - E - F - A (7-9-3-5)"
+
+    const message = await stream.finalMessage();
+    checkStop(message.stop_reason);
+    if (!message.parsed_output) {
+      throw new AnalyseError("Claude gaf geen bruikbare analyse terug. Probeer het opnieuw.", 502);
     }
-  ],
-  "oefenplan": [
-    "Stap 1: Speel elk akkoord apart als shell voicing...",
-    "Stap 2: ..."
-  ],
-  "jazzVariaties": [
-    "Vervang G7 door Db7 (tritone substitutie)...",
-    "..."
-  ]
+    return normaliseerPdfResultaat(message.parsed_output);
+  } catch (error) {
+    throw toAnalyseError(error);
+  }
 }
 
-Geef ALLEEN geldige JSON terug, geen andere tekst.`,
-      },
-    ],
-  });
-
-  const text =
-    message.content[0].type === "text" ? message.content[0].text : "";
-
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) {
-    throw new Error("Geen geldige JSON in het antwoord gevonden");
+/** Kleine opschoning: noten per maat sorteren, rusten consistent maken. */
+function normaliseerPdfResultaat(result: PdfAnalyseResult): PdfAnalyseResult {
+  for (const fragment of result.fragmenten) {
+    for (const maat of fragment.maatNoten) {
+      for (const noot of maat.noten) {
+        if (noot.type === "rust" || noot.noot.toLowerCase() === "rust") {
+          noot.type = "rust";
+          noot.noot = "rust";
+        } else {
+          // "bb3" → "Bb3", "c#4" → "C#4"
+          noot.noot = noot.noot.charAt(0).toUpperCase() + noot.noot.slice(1);
+        }
+      }
+      maat.noten.sort((a, b) => a.beatPositie - b.beatPositie);
+    }
   }
+  return result;
+}
 
-  return JSON.parse(jsonMatch[0]) as AkkoordAnalyseResult;
+export async function analyseerAkkoorden(chords: string): Promise<AkkoordAnalyseResult> {
+  try {
+    const message = await getClient().beta.messages.parse({
+      model: MODEL,
+      max_tokens: 16000,
+      betas: ["server-side-fallback-2026-07-01"],
+      fallbacks: "default",
+      thinking: { type: "adaptive" },
+      output_config: { effort: AKKOORD_EFFORT, format: betaZodOutputFormat(AkkoordAnalyseSchema) },
+      system: SYSTEM_PROMPT,
+      messages: [
+        {
+          role: "user",
+          content: `Analyseer deze akkoordprogressie voor een beginnende jazzpianist: ${chords}
+
+Geef per akkoord de functie in de toonsoort, voicings (shell = root-3-7, rootless A = 3-5-7-9, rootless B = 7-9-3-5, met concrete nootnamen), een oefenplan in stappen en jazzvariaties (bijv. tritonussubstitutie, ii-V's ervoor).`,
+        },
+      ],
+    });
+    checkStop(message.stop_reason);
+    if (!message.parsed_output) {
+      throw new AnalyseError("Claude gaf geen bruikbare analyse terug. Probeer het opnieuw.", 502);
+    }
+    return message.parsed_output;
+  } catch (error) {
+    throw toAnalyseError(error);
+  }
 }
