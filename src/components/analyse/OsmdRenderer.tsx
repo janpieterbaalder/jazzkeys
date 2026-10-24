@@ -1,12 +1,26 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { normalizePianoXml } from "@/lib/xml-utils";
+import { applyMidwayerFixes, getBarlineXs } from "@/lib/osmd-svg";
+import {
+  buildOsmdTimeline,
+  notesSoundingAt,
+  timeAtX,
+  xAtTime,
+  type Timeline,
+} from "@/lib/score-timeline";
+import { ScorePlayer } from "@/lib/score-player";
+import { playChord, unlockAudio } from "@/lib/audio";
+
+export type RenderFixes = "midwayer";
 
 interface OsmdRendererProps {
   musicXml: string;
   fromMeasure?: number;
   toMeasure?: number;
+  /** Bestand-specifieke correcties na het renderen (zie lib/osmd-svg.ts) */
+  renderFixes?: RenderFixes;
 }
 
 interface PianoKey {
@@ -15,13 +29,6 @@ interface PianoKey {
   isBlack: boolean;
   midi: number;
   label?: string;
-}
-
-// Measure position extracted from rendered SVG barlines
-interface MeasurePos {
-  startX: number;
-  endX: number;
-  width: number;
 }
 
 function buildPianoKeys(): PianoKey[] {
@@ -41,157 +48,68 @@ function buildPianoKeys(): PianoKey[] {
 }
 
 const PIANO_KEYS = buildPianoKeys();
+const WHITE_KEYS = PIANO_KEYS.filter((k) => !k.isBlack);
+const BLACK_KEYS = PIANO_KEYS.filter((k) => k.isBlack);
 
-// Post-render fix: move bass staff rests to the top line.
-// Uses barline rects to determine bass staff position, then shifts rest-colored
-// SVG paths that are in the lower half of the bass staff up to the top line.
-function fixDisplacedRests(_osmd: unknown, svgEl: SVGSVGElement) {
-  // Find bass staff top Y from barline rects.
-  // Barlines are 1px-wide, ~41px-tall rects. Treble barlines start at ~85,
-  // bass barlines start at ~195. We need the highest bass barline Y.
-  const rects = svgEl.querySelectorAll("rect");
-  let trebleBarY = Infinity;
-  let bassBarY = -Infinity;
-  for (const r of rects) {
-    const w = parseFloat(r.getAttribute("width") || "0");
-    const h = parseFloat(r.getAttribute("height") || "0");
-    if (w <= 2 && h > 30 && h < 60) {
-      const y = parseFloat(r.getAttribute("y") || "0");
-      trebleBarY = Math.min(trebleBarY, y);
-      bassBarY = Math.max(bassBarY, y);
-    }
-  }
+// Kleuren volgens CLAUDE.md: rechterhand blauw, linkerhand indigo, aangeklikt amber.
+const RH_KEY = "bg-blue-400 border-blue-500";
+const LH_KEY = "bg-indigo-400 border-indigo-500";
+const CLICK_KEY = "bg-amber-400 border-amber-500";
 
-  if (bassBarY <= trebleBarY) return;
+const btn =
+  "px-2.5 py-1.5 rounded-lg text-sm transition-colors disabled:opacity-50 border";
+const btnOff = "bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700";
+const btnOn = "bg-blue-600/20 text-blue-300 border-blue-500/40";
 
-  // Bass staff: top line = bassBarY, bottom line = bassBarY + barHeight
-  const bassTopLine = bassBarY;
-  const bassStaffHeight = 41; // 5 lines, 4 spaces of ~10px
-
-  // Find the X boundary of measure 12: the 12th barline marks the end of measure 12.
-  // Barlines are 1px-wide tall rects sorted by X position.
-  const barlineXs: number[] = [];
-  for (const r of rects) {
-    const w = parseFloat(r.getAttribute("width") || "0");
-    const h = parseFloat(r.getAttribute("height") || "0");
-    if (w <= 2 && h > 30 && h < 60) {
-      barlineXs.push(parseFloat(r.getAttribute("x") || "0"));
-    }
-  }
-  const uniqueBarXs = [...new Set(barlineXs.map(x => Math.round(x)))].sort((a, b) => a - b);
-  // The 12th unique barline X is the right edge of measure 12
-  const maxX = uniqueBarXs.length >= 12 ? uniqueBarXs[11] + 5 : Infinity;
-
-  // Move rest-colored paths (#64748b) in the bass staff to the top line.
-  // Only for the first 12 measures (multi-voice section).
-  // Filter: must be complex path (dLen > 500) to avoid moving stems/simple elements.
-  const restColor = "#64748b";
-  const paths = svgEl.querySelectorAll("path");
-  for (const p of paths) {
-    if (p.getAttribute("fill") !== restColor) continue;
-    const d = p.getAttribute("d") || "";
-    if (d.length < 500) continue; // Skip simple paths (stems, etc.)
-    const match = d.match(/^M([\d.e+-]+)[\s,]+([\d.e+-]+)/);
-    if (!match) continue;
-    const px = parseFloat(match[1]);
-    const py = parseFloat(match[2]);
-
-    // Only first 12 measures
-    if (px > maxX) continue;
-
-    // Target rest paths in the bass staff area (from just below top line to below bottom)
-    if (py < bassTopLine + 3 || py > bassTopLine + bassStaffHeight + 15) continue;
-
-    // Shift up to sit on the bass top line
-    const delta = bassTopLine - py;
-    if (Math.abs(delta) > 1) {
-      p.setAttribute("transform", `translate(0, ${delta})`);
-    }
-  }
-
-  // Fix bass fermata in measure 12: the fermata is a complex glyph path
-  // (24 C-curves, fill=#60a5fa) that sits just above the bass staff (y≈190).
-  // Move it slightly upward so it doesn't crowd the staff.
-  const m12StartX = uniqueBarXs.length >= 11 ? uniqueBarXs[10] : 0;
-  const m12EndX = uniqueBarXs.length >= 12 ? uniqueBarXs[11] : 0;
-  if (m12StartX > 0 && m12EndX > 0) {
-    for (const p of paths) {
-      if (p.getAttribute("fill") !== "#60a5fa") continue;
-      const d = p.getAttribute("d") || "";
-      const cCount = (d.match(/C/g) || []).length;
-      // Fermata glyph has ~24 C-curves and is a large path (dLen > 1800)
-      if (cCount < 20 || cCount > 28 || d.length < 1800) continue;
-      const match = d.match(/^M([\d.e+-]+)[\s,]+([\d.e+-]+)/);
-      if (!match) continue;
-      const px = parseFloat(match[1]);
-      const py = parseFloat(match[2]);
-      // Must be within measure 12 X range and near the bass staff top
-      if (px < m12StartX || px > m12EndX) continue;
-      if (py < bassTopLine - 20 || py > bassTopLine + 5) continue;
-      // Shift upward by 10px
-      p.setAttribute("transform", "translate(0, -10)");
-    }
-  }
-}
-
-// Extract barline X positions from the rendered SVG to get measure boundaries
-function extractMeasurePositions(svgEl: SVGSVGElement): MeasurePos[] {
-  const rects = svgEl.querySelectorAll("rect");
-  const xs = new Set<number>();
-
-  for (const r of rects) {
-    const w = parseFloat(r.getAttribute("width") || "0");
-    const h = parseFloat(r.getAttribute("height") || "0");
-    // Barlines: very narrow rects (width ≤ 2) that are tall (height > 30)
-    if (w <= 2 && h > 30) {
-      xs.add(Math.round(parseFloat(r.getAttribute("x") || "0") * 100) / 100);
-    }
-  }
-
-  const sorted = [...xs].sort((a, b) => a - b);
-  const measures: MeasurePos[] = [];
-
-  for (let i = 0; i < sorted.length - 1; i++) {
-    const startX = sorted[i];
-    const endX = sorted[i + 1];
-    measures.push({ startX, endX, width: endX - startX });
-  }
-
-  return measures;
-}
-
-export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdRendererProps) {
+export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure, renderFixes }: OsmdRendererProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const osmdRef = useRef<unknown>(null);
   const playlineRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const [timeline, setTimeline] = useState<Timeline | null>(null);
+  const timelineRef = useRef<Timeline | null>(null);
+  const playerRef = useRef<ScorePlayer | null>(null);
   const [playing, setPlaying] = useState(false);
-  const playingRef = useRef(false);
+  const [countingIn, setCountingIn] = useState(false);
   const [speed, setSpeed] = useState(100);
-  const speedRef = useRef(100);
-  const [showPiano, setShowPiano] = useState(false);
-  const [activeNotes, setActiveNotes] = useState<Set<number>>(new Set());
+  const [metronome, setMetronome] = useState(false);
+  const [countIn, setCountIn] = useState(false);
+  const [rhOn, setRhOn] = useState(true);
+  const [lhOn, setLhOn] = useState(true);
+  const [loopOn, setLoopOn] = useState(false);
+  const [loopFrom, setLoopFrom] = useState(1);
+  const [loopTo, setLoopTo] = useState(4);
+  const [currentMeasure, setCurrentMeasure] = useState<number | null>(null);
+
+  const [showPiano, setShowPiano] = useState(true);
+  const [activeNotes, setActiveNotes] = useState<Map<number, number>>(new Map());
   const [clickedNotes, setClickedNotes] = useState<Set<number>>(new Set());
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const playerRef = useRef<HTMLDivElement>(null);
+  const playerBoxRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number | null>(null);
   const clickTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Measure-based playback state
-  const measuresRef = useRef<MeasurePos[]>([]);
-  const playbackRef = useRef<{
-    measureIndex: number;
-    measureStartTime: number;
-    msPerMeasure: number;
-  } | null>(null);
+  const activeKeyRef = useRef("");
+  /** CSS-schaal van de SVG (fullscreen); playline-x = svg-x × schaal */
+  const scaleRef = useRef(1);
+  /** Afstand playline ↔ linkerrand viewport tijdens pauze (voor herpositioneren via scroll) */
+  const lineViewOffsetRef = useRef<number | null>(null);
+  const lineMovedRef = useRef(false);
 
   // Fullscreen via <dialog> — works on all browsers including iOS Safari.
   // The player DOM node is moved into the dialog when entering fullscreen,
   // and moved back when exiting. This preserves the OSMD-rendered SVG.
   const dialogRef = useRef<HTMLDialogElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
+
+  const placePlayline = useCallback((svgX: number) => {
+    const line = playlineRef.current;
+    if (!line) return;
+    line.style.left = `${svgX * scaleRef.current}px`;
+    line.style.display = "block";
+  }, []);
 
   // Scale the OSMD SVG so the full grand staff fits the available height.
   // The SVG has ~65px top margin and ~75px bottom margin around the actual
@@ -207,6 +125,7 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
     if (availH <= 0 || availH >= svgH) {
       svg.style.transform = "";
       svg.style.transformOrigin = "";
+      scaleRef.current = 1;
       return;
     }
     // Crop top/bottom margins of the SVG to make the staves bigger
@@ -217,11 +136,18 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
     // Scale then shift up to hide the top margin
     svg.style.transform = `scale(${scale}) translateY(${-topCrop}px)`;
     svg.style.transformOrigin = "top left";
+    scaleRef.current = scale;
+  }, []);
+
+  const resetScale = useCallback(() => {
+    const svg = scrollRef.current?.querySelector("svg");
+    if (svg) { svg.style.transform = ""; svg.style.transformOrigin = ""; }
+    scaleRef.current = 1;
   }, []);
 
   const enterFullscreen = useCallback(() => {
     const dialog = dialogRef.current;
-    const player = playerRef.current;
+    const player = playerBoxRef.current;
     if (!dialog || !player) return;
     dialog.appendChild(player);
     dialog.showModal();
@@ -233,30 +159,19 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
   }, [scaleScoreToFit]);
 
   const exitFullscreen = useCallback(() => {
-    const dialog = dialogRef.current;
-    const player = playerRef.current;
-    const wrapper = wrapperRef.current;
-    if (!player || !wrapper) return;
-    // Remove scaling before moving back
-    const svg = scrollRef.current?.querySelector("svg");
-    if (svg) { svg.style.transform = ""; svg.style.transformOrigin = ""; }
-    dialog?.close();
-    wrapper.appendChild(player);
-    setIsFullscreen(false);
-    try { (screen.orientation as unknown as { unlock?: () => void }).unlock?.(); } catch {}
+    // Sluiten van de dialog triggert het "close"-event, dat de speler terugzet.
+    dialogRef.current?.close();
   }, []);
 
-  // Handle dialog close (Escape key) and mobile back-button
+  // Handle dialog close (Escape key, close button) and mobile back-button
   useEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog) return;
 
     const handleClose = () => {
-      const player = playerRef.current;
+      const player = playerBoxRef.current;
       const wrapper = wrapperRef.current;
-      // Remove SVG scaling
-      const svg = scrollRef.current?.querySelector("svg");
-      if (svg) { svg.style.transform = ""; svg.style.transformOrigin = ""; }
+      resetScale();
       if (player && wrapper) wrapper.appendChild(player);
       setIsFullscreen(false);
       try { (screen.orientation as unknown as { unlock?: () => void }).unlock?.(); } catch {}
@@ -264,10 +179,7 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
     dialog.addEventListener("close", handleClose);
 
     const handlePopState = () => {
-      if (dialog.open) {
-        dialog.close();
-        // handleClose fires automatically via the close event
-      }
+      if (dialog.open) dialog.close();
     };
     window.addEventListener("popstate", handlePopState);
 
@@ -275,7 +187,7 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
       dialog.removeEventListener("close", handleClose);
       window.removeEventListener("popstate", handlePopState);
     };
-  }, []);
+  }, [resetScale]);
 
   // Re-scale score when piano is toggled in fullscreen, or on orientation change
   useEffect(() => {
@@ -290,19 +202,69 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
     return () => window.removeEventListener("resize", handleResize);
   }, [isFullscreen, scaleScoreToFit]);
 
-  // Keep speedRef in sync
-  useEffect(() => { speedRef.current = speed; }, [speed]);
+  // ── Afspeel-loop (alleen visueel; audio wordt door ScorePlayer gepland) ──
+  const startFrameLoop = useCallback(() => {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    const tick = () => {
+      const player = playerRef.current;
+      const tl = timelineRef.current;
+      const scroll = scrollRef.current;
+      if (!player || !tl) return;
+
+      const pos = player.position();
+      const svgX = xAtTime(tl.steps, pos);
+      placePlayline(svgX);
+
+      if (scroll) {
+        const x = svgX * scaleRef.current;
+        const viewWidth = scroll.clientWidth;
+        const lineVisible = x > scroll.scrollLeft - 50 && x < scroll.scrollLeft + viewWidth + 50;
+        if (lineVisible) {
+          // Houd de lijn op ~1/3 van links; bij een sprong (herhaling) direct mee.
+          const target = x - viewWidth / 3;
+          const diff = target - scroll.scrollLeft;
+          scroll.scrollLeft += Math.abs(diff) > viewWidth ? diff : diff * 0.08;
+        } else {
+          scroll.scrollLeft = x - viewWidth / 3;
+        }
+      }
+
+      // Klinkende noten → piano (key = midi, value = hand)
+      const sounding = notesSoundingAt(tl.notes, pos).filter((n) => !player.mutedParts.has(n.part));
+      const key = sounding.map((n) => `${n.midi}:${n.part}`).sort().join(",");
+      if (key !== activeKeyRef.current) {
+        activeKeyRef.current = key;
+        setActiveNotes(new Map(sounding.map((n) => [n.midi, n.part])));
+      }
+
+      const measure = tl.measures.find((m) => pos >= m.start && pos < m.end);
+      setCurrentMeasure(measure?.number ?? null);
+      setCountingIn(player.isCountingIn());
+
+      if (player.playing) rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+  }, [placePlayline]);
+
+  const clearHighlights = useCallback(() => {
+    activeKeyRef.current = "";
+    setActiveNotes(new Map());
+    setCountingIn(false);
+  }, []);
 
   // Initialize OSMD
   useEffect(() => {
     let mounted = true;
+    const container = containerRef.current;
+
     async function init() {
-      if (!containerRef.current || !musicXml) return;
+      if (!container || !musicXml) return;
       try {
         setLoading(true);
         setError(null);
         const { OpenSheetMusicDisplay } = await import("opensheetmusicdisplay");
-        if (!mounted || !containerRef.current) return;
+        if (!mounted) return;
+        container.innerHTML = "";
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const options: any = {
@@ -330,35 +292,43 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
           drawFingerings: false,
           drawLyrics: false,
           drawSlurs: true,
-          // No alignRests — OSMD default positioning works for treble staff
           followCursor: false,
-          cursorsOptions: [{ type: 0, color: "#3b82f600", alpha: 0 }],
           ...(fromMeasure !== undefined && { drawFromMeasureNumber: fromMeasure }),
           ...(toMeasure !== undefined && { drawUpToMeasureNumber: toMeasure }),
         };
 
-        const osmd = new OpenSheetMusicDisplay(containerRef.current, options);
-        // Normalize XML structure (merge split piano parts, fix measure numbers, clef lines)
-        const normalizedXml = normalizePianoXml(musicXml);
-        await osmd.load(normalizedXml);
+        const osmd = new OpenSheetMusicDisplay(container, options);
+        // Normalize XML structure (measure numbers, clef lines)
+        await osmd.load(normalizePianoXml(musicXml));
+        if (!mounted) return;
         osmd.render();
 
         if (scrollRef.current) scrollRef.current.scrollLeft = 0;
 
-        // Post-render: fix displaced bass rests and extract measure positions
-        const svgEl = containerRef.current.querySelector("svg");
-        if (svgEl) {
-          fixDisplacedRests(osmd, svgEl);
-          measuresRef.current = extractMeasurePositions(svgEl);
-        }
+        const svgEl = container.querySelector("svg");
+        const barlines = svgEl ? getBarlineXs(svgEl) : [];
+        if (svgEl && renderFixes === "midwayer") applyMidwayerFixes(svgEl);
 
-        containerRef.current.addEventListener("click", handleNoteClick);
+        const tl = buildOsmdTimeline(osmd, barlines);
         osmdRef.current = osmd;
+        timelineRef.current = tl;
+        playerRef.current?.dispose();
+        const player = new ScorePlayer(tl);
+        player.onEnded = () => {
+          setPlaying(false);
+          clearHighlights();
+          if (playlineRef.current) playlineRef.current.style.display = "none";
+        };
+        playerRef.current = player;
+        setTimeline(tl);
+        const firstMeasure = tl.measures[0]?.number ?? 1;
+        setLoopFrom(firstMeasure);
+        setLoopTo(Math.min(firstMeasure + 3, tl.measures[tl.measures.length - 1]?.number ?? firstMeasure));
         setLoading(false);
       } catch (err) {
         if (mounted) {
-          const msg = err instanceof Error ? err.message + "\n" + err.stack : String(err);
-          console.error("OSMD init error:", msg);
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error("OSMD init error:", err);
           setError(msg);
           setLoading(false);
         }
@@ -368,15 +338,35 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
     return () => {
       mounted = false;
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      playingRef.current = false;
-      containerRef.current?.removeEventListener("click", handleNoteClick);
+      playerRef.current?.dispose();
+      playerRef.current = null;
+      setPlaying(false);
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [musicXml, fromMeasure, toMeasure]);
+  }, [musicXml, fromMeasure, toMeasure, renderFixes, clearHighlights]);
+
+  // Instellingen doorzetten naar de speler
+  useEffect(() => { playerRef.current?.setSpeed(speed / 100); }, [speed, timeline]);
+  useEffect(() => { if (playerRef.current) playerRef.current.metronome = metronome; }, [metronome, timeline]);
+  useEffect(() => { if (playerRef.current) playerRef.current.countIn = countIn ? (timeline?.beatsPerMeasure ?? 4) : 0; }, [countIn, timeline]);
+  useEffect(() => {
+    const p = playerRef.current;
+    if (!p) return;
+    p.mutedParts = new Set([...(rhOn ? [] : [0]), ...(lhOn ? [] : [1])]);
+  }, [rhOn, lhOn, timeline]);
+
+  const loopRange = useMemo(() => {
+    if (!loopOn || !timeline) return null;
+    const lo = Math.min(loopFrom, loopTo);
+    const hi = Math.max(loopFrom, loopTo);
+    const a = timeline.measures.find((m) => m.number === lo);
+    const b = timeline.measures.find((m) => m.number === hi);
+    return a && b ? { start: a.start, end: b.end } : null;
+  }, [loopOn, loopFrom, loopTo, timeline]);
+
+  useEffect(() => { playerRef.current?.setLoop(loopRange); }, [loopRange]);
 
   // Click/tap handler for notes — works with CSS-scaled SVG
-  const handleNoteClick = useCallback((e: Event) => {
-    const mouseEvent = e as MouseEvent;
+  const handleNoteClick = useCallback((e: React.MouseEvent) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const osmd = osmdRef.current as any;
     if (!osmd) return;
@@ -388,14 +378,13 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
       const svgRect = svgEl.getBoundingClientRect();
       const svgW = parseFloat(svgEl.getAttribute("width") || "1");
       const svgH = parseFloat(svgEl.getAttribute("height") || "1");
-      // Calculate the actual scale factor from CSS transform
       const scaleX = svgRect.width / svgW;
       const scaleY = svgRect.height / svgH;
-      // Convert screen coordinates to SVG coordinates, accounting for CSS scale
-      const svgX = (mouseEvent.clientX - svgRect.left) / scaleX;
-      const svgY = (mouseEvent.clientY - svgRect.top) / scaleY;
+      const svgX = (e.clientX - svgRect.left) / scaleX;
+      const svgY = (e.clientY - svgRect.top) / scaleY;
 
       const clickedMidi = new Set<number>();
+      let hitX: number | null = null;
       // Base hit-area in SVG units; scaled inversely with CSS zoom so taps
       // stay accurate on small screens. Keep small to avoid overlapping neighbours.
       const baseTolerance = 6;
@@ -415,6 +404,7 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
                     if (Math.abs(noteX - svgX) < tolerance * 3 && Math.abs(noteY - svgY) < tolerance) {
                       const halfTone = gNote.sourceNote?.halfTone;
                       if (halfTone !== undefined) clickedMidi.add(halfTone + 12);
+                      hitX = noteX;
                     }
                   }
                 }
@@ -424,179 +414,116 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
         }
       }
       if (clickedMidi.size > 0) {
+        void unlockAudio().then(() => playChord([...clickedMidi], { duration: 1 }));
         setClickedNotes(clickedMidi);
         if (clickTimeoutRef.current) clearTimeout(clickTimeoutRef.current);
         clickTimeoutRef.current = setTimeout(() => setClickedNotes(new Set()), 2000);
+
+        // Gepauzeerd: aangeklikte noot wordt het nieuwe startpunt.
+        const player = playerRef.current;
+        const tl = timelineRef.current;
+        if (player && tl && !player.playing && hitX !== null) {
+          const t = timeAtX(tl.steps, hitX, player.position());
+          player.seek(t);
+          placePlayline(xAtTime(tl.steps, t));
+          lineMovedRef.current = false;
+          const scroll = scrollRef.current;
+          if (scroll) lineViewOffsetRef.current = xAtTime(tl.steps, t) * scaleRef.current - scroll.scrollLeft;
+        }
       }
     } catch { /* ignore */ }
-  }, []);
+  }, [placePlayline]);
 
-  // ── Measure-based playback with requestAnimationFrame ──
-  // Each measure takes exactly the same musical time (4 beats in 4/4).
-  // The scroll speed adapts per measure based on its pixel width.
+  useEffect(() => () => { if (clickTimeoutRef.current) clearTimeout(clickTimeoutRef.current); }, []);
 
-  const calcMsPerMeasure = useCallback(() => {
-    // 4/4 time = 4 beats per measure. BPM = 80 base.
-    const bpm = 80;
-    const beatsPerMeasure = 4;
-    return (beatsPerMeasure * 60000 / bpm) / (speedRef.current / 100);
-  }, []);
-
-  const animateFrame = useCallback((now: number) => {
-    if (!playingRef.current) return;
-
-    const pb = playbackRef.current;
-    const measures = measuresRef.current;
-    const scroll = scrollRef.current;
-    const line = playlineRef.current;
-
-    if (!pb || !scroll || !line || measures.length === 0) return;
-
-    // How far into the current measure are we?
-    const elapsed = now - pb.measureStartTime;
-    // Recalculate msPerMeasure each frame so speed changes take effect immediately
-    const msPerMeasure = calcMsPerMeasure();
-    const t = Math.min(elapsed / msPerMeasure, 1);
-
-    const measure = measures[pb.measureIndex];
-    if (!measure) { stopPlayback(); return; }
-
-    // Linear interpolation within the current measure
-    const currentX = measure.startX + (measure.endX - measure.startX) * t;
-
-    // Position playline
-    line.style.left = `${currentX}px`;
-    line.style.display = "block";
-
-    // Smooth scroll: keep playline at ~1/3 from left edge.
-    // Only auto-scroll if the playline is near the visible area.
-    const viewWidth = scroll.clientWidth;
-    const viewLeft = scroll.scrollLeft;
-    const viewRight = viewLeft + viewWidth;
-    const lineVisible = currentX > viewLeft - 50 && currentX < viewRight + 50;
-    if (lineVisible) {
-      const targetScroll = currentX - viewWidth / 3;
-      scroll.scrollLeft += (targetScroll - scroll.scrollLeft) * 0.06;
-    }
-
-    // If measure is complete, advance to next
-    if (t >= 1) {
-      const nextIdx = pb.measureIndex + 1;
-      if (nextIdx >= measures.length) {
-        stopPlayback();
-        return;
-      }
-      playbackRef.current = {
-        measureIndex: nextIdx,
-        measureStartTime: now,
-        msPerMeasure,
-      };
-    }
-
-    rafRef.current = requestAnimationFrame(animateFrame);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [calcMsPerMeasure]);
-
-  // Track the visual offset of the playline within the viewport when pausing
-  const lineViewOffsetRef = useRef<number | null>(null);
-
-  // Pause: stop animation but keep playline visible and remember position
   const pausePlayback = useCallback(() => {
-    playingRef.current = false;
+    const player = playerRef.current;
+    if (!player) return;
+    player.pause();
     if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
     setPlaying(false);
-    setActiveNotes(new Set());
-    // Remember where the line sits relative to the viewport
+    clearHighlights();
+    // Onthoud waar de lijn staat t.o.v. de viewport
     const line = playlineRef.current;
     const scroll = scrollRef.current;
     if (line && scroll) {
-      const lineX = parseFloat(line.style.left) || 0;
-      lineViewOffsetRef.current = lineX - scroll.scrollLeft;
+      lineViewOffsetRef.current = (parseFloat(line.style.left) || 0) - scroll.scrollLeft;
+      lineMovedRef.current = false;
     }
-  }, []);
+  }, [clearHighlights]);
 
-  // Full stop: hide playline and reset position
-  const stopPlayback = useCallback(() => {
-    playingRef.current = false;
-    playbackRef.current = null;
-    if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
-    setPlaying(false);
-    setActiveNotes(new Set());
-    if (playlineRef.current) playlineRef.current.style.display = "none";
-  }, []);
+  const startPlayback = useCallback(async () => {
+    const player = playerRef.current;
+    const tl = timelineRef.current;
+    if (!player || !tl) return;
+    let from = player.position();
+    // Lijn verschoven via scrollen tijdens pauze → start vanaf die plek
+    const line = playlineRef.current;
+    if (lineMovedRef.current && line && line.style.display !== "none") {
+      from = timeAtX(tl.steps, (parseFloat(line.style.left) || 0) / scaleRef.current, from);
+    }
+    lineViewOffsetRef.current = null;
+    lineMovedRef.current = false;
+    if (from <= 0 && scrollRef.current) scrollRef.current.scrollLeft = 0;
+    await player.play(from);
+    setPlaying(true);
+    startFrameLoop();
+  }, [startFrameLoop]);
 
   const togglePlay = useCallback(() => {
-    if (playing) {
-      // Pause — keep position
-      pausePlayback();
-    } else {
-      const measures = measuresRef.current;
-      if (measures.length === 0) return;
-
-      playingRef.current = true;
-      setPlaying(true);
-
-      // Read current playline X to determine resume position
-      const line = playlineRef.current;
-      const lineX = line ? parseFloat(line.style.left) || 0 : 0;
-      lineViewOffsetRef.current = null; // stop scroll-tracking
-
-      if (playbackRef.current && lineX > 0) {
-        // Find which measure the playline is now in (may have moved via scrolling)
-        let mIdx = playbackRef.current.measureIndex;
-        for (let i = 0; i < measures.length; i++) {
-          if (lineX >= measures[i].startX && lineX <= measures[i].endX) { mIdx = i; break; }
-        }
-        const measure = measures[mIdx];
-        if (measure) {
-          const progress = Math.max(0, Math.min(1, (lineX - measure.startX) / (measure.endX - measure.startX)));
-          const msPerMeasure = calcMsPerMeasure();
-          playbackRef.current = {
-            measureIndex: mIdx,
-            measureStartTime: performance.now() - progress * msPerMeasure,
-            msPerMeasure,
-          };
-        }
-      } else if (!playbackRef.current) {
-        // Fresh start from beginning
-        playbackRef.current = {
-          measureIndex: 0,
-          measureStartTime: performance.now(),
-          msPerMeasure: calcMsPerMeasure(),
-        };
-        if (scrollRef.current) scrollRef.current.scrollLeft = 0;
-      }
-
-      rafRef.current = requestAnimationFrame(animateFrame);
-    }
-  }, [playing, pausePlayback, calcMsPerMeasure, animateFrame]);
+    if (playerRef.current?.playing) pausePlayback();
+    else void startPlayback();
+  }, [pausePlayback, startPlayback]);
 
   // When paused, move the playline with the scroll so the user can reposition
   useEffect(() => {
     const scroll = scrollRef.current;
     if (!scroll) return;
     const handleScroll = () => {
-      // Only move playline when paused (not playing) and line is visible
-      if (playingRef.current) return;
+      if (playerRef.current?.playing) return;
       const offset = lineViewOffsetRef.current;
       if (offset === null) return;
       const line = playlineRef.current;
       if (!line || line.style.display === "none") return;
-      // Keep line at the same visual position relative to the viewport
-      const newX = scroll.scrollLeft + offset;
-      line.style.left = `${newX}px`;
+      line.style.left = `${scroll.scrollLeft + offset}px`;
+      lineMovedRef.current = true;
     };
     scroll.addEventListener("scroll", handleScroll);
     return () => scroll.removeEventListener("scroll", handleScroll);
   }, []);
 
   const resetPlayback = useCallback(() => {
+    playerRef.current?.stop();
+    if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
+    setPlaying(false);
+    clearHighlights();
+    setCurrentMeasure(null);
     lineViewOffsetRef.current = null;
-    stopPlayback();
+    lineMovedRef.current = false;
+    if (playlineRef.current) playlineRef.current.style.display = "none";
     if (scrollRef.current) scrollRef.current.scrollTo({ left: 0, behavior: "smooth" });
     setClickedNotes(new Set());
-  }, [stopPlayback]);
+  }, [clearHighlights]);
 
+  // Spatiebalk = afspelen/pauze (niet als de focus in een invoerveld of knop staat)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== "Space" || e.repeat || !timelineRef.current) return;
+      const target = e.target as HTMLElement | null;
+      if (target?.closest("input, textarea, select, button, [contenteditable]")) return;
+      e.preventDefault();
+      togglePlay();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [togglePlay]);
+
+  const pressKey = useCallback((midi: number) => {
+    void unlockAudio().then(() => playChord([midi], { duration: 0.9 }));
+    setClickedNotes(new Set([midi]));
+    if (clickTimeoutRef.current) clearTimeout(clickTimeoutRef.current);
+    clickTimeoutRef.current = setTimeout(() => setClickedNotes(new Set()), 300);
+  }, []);
 
   if (error) {
     return (
@@ -607,40 +534,41 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
     );
   }
 
-  const highlightedNotes = new Set([...activeNotes, ...clickedNotes]);
-  const whiteKeys = PIANO_KEYS.filter((k) => !k.isBlack);
-  const whiteKeyWidth = 100 / whiteKeys.length;
+  const whiteKeyWidth = 100 / WHITE_KEYS.length;
+  const keyClass = (midi: number, base: string) => {
+    if (clickedNotes.has(midi)) return CLICK_KEY;
+    const part = activeNotes.get(midi);
+    if (part === 0) return RH_KEY;
+    if (part === 1) return LH_KEY;
+    return base;
+  };
 
   const pianoKeyboard = (height: string) => (
-    <div className={`relative ${height} bg-slate-950 rounded-lg border border-slate-700/50 overflow-hidden select-none`}>
-      {whiteKeys.map((key, i) => {
-        const isActive = highlightedNotes.has(key.midi);
-        return (
-          <div
-            key={`w-${key.note}${key.octave}`}
-            className={`absolute top-0 bottom-0 border-r transition-colors duration-75 ${
-              isActive ? "bg-blue-500 border-blue-600" : "bg-slate-100 border-slate-300"
-            }`}
-            style={{ left: `${i * whiteKeyWidth}%`, width: `${whiteKeyWidth}%` }}
-          >
-            {key.label && (
-              <span className={`absolute bottom-0.5 left-1/2 -translate-x-1/2 text-[8px] ${isActive ? "text-white" : "text-slate-400"}`}>
-                {key.label}
-              </span>
-            )}
-          </div>
-        );
-      })}
-      {PIANO_KEYS.filter((k) => k.isBlack).map((key) => {
-        const isActive = highlightedNotes.has(key.midi);
+    <div className={`relative ${height} bg-slate-950 rounded-lg border border-slate-700/50 overflow-hidden select-none touch-manipulation`}>
+      {WHITE_KEYS.map((key, i) => (
+        <div
+          key={`w-${key.note}${key.octave}`}
+          onPointerDown={(e) => { e.preventDefault(); pressKey(key.midi); }}
+          className={`absolute top-0 bottom-0 border-r transition-colors duration-75 cursor-pointer ${keyClass(key.midi, "bg-slate-100 border-slate-300")}`}
+          style={{ left: `${i * whiteKeyWidth}%`, width: `${whiteKeyWidth}%` }}
+        >
+          {key.label && (
+            <span className={`absolute bottom-0.5 left-1/2 -translate-x-1/2 text-[8px] pointer-events-none ${activeNotes.has(key.midi) ? "text-white" : "text-slate-400"}`}>
+              {key.label}
+            </span>
+          )}
+        </div>
+      ))}
+      {BLACK_KEYS.map((key) => {
         const baseNote = key.note.charAt(0);
-        const whiteIdx = whiteKeys.findIndex((w) => w.note === baseNote && w.octave === key.octave);
+        const whiteIdx = WHITE_KEYS.findIndex((w) => w.note === baseNote && w.octave === key.octave);
         if (whiteIdx < 0) return null;
         const left = (whiteIdx + 0.62) * whiteKeyWidth;
         return (
           <div
             key={`b-${key.note}${key.octave}`}
-            className={`absolute top-0 rounded-b-sm transition-colors duration-75 ${isActive ? "bg-blue-400" : "bg-slate-900"}`}
+            onPointerDown={(e) => { e.preventDefault(); pressKey(key.midi); }}
+            className={`absolute top-0 rounded-b-sm transition-colors duration-75 cursor-pointer ${keyClass(key.midi, "bg-slate-900")}`}
             style={{ left: `${left}%`, width: `${whiteKeyWidth * 0.7}%`, height: "58%", zIndex: 1 }}
           />
         );
@@ -648,36 +576,79 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
     </div>
   );
 
+  const measureNumbers = timeline?.measures.map((m) => m.number) ?? [];
+  const bpmShown = timeline ? Math.round(timeline.bpm * (speed / 100)) : null;
+
   const controlsBar = () => (
-    <div className="flex items-center gap-1.5 flex-wrap px-1">
-      <button onClick={togglePlay} disabled={loading} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium disabled:opacity-50 transition-colors">
-        {playing ? (
-          <><svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" /></svg>Pauze</>
-        ) : (
-          <><svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>Afspelen</>
+    <div className="flex flex-col gap-1.5 px-1">
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <button onClick={togglePlay} disabled={loading} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium disabled:opacity-50 transition-colors" title="Afspelen/pauze (spatiebalk)">
+          {playing ? (
+            <><svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" /></svg>{countingIn ? "Aftellen…" : "Pauze"}</>
+          ) : (
+            <><svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>Afspelen</>
+          )}
+        </button>
+        <button onClick={resetPlayback} disabled={loading} className={`${btn} ${btnOff}`} title="Terug naar begin">
+          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z" /></svg>
+        </button>
+        <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-slate-800/60 border border-slate-700">
+          <span className="text-xs text-slate-400 tabular-nums w-14" title="Tempo (kwartnoten per minuut)">
+            {bpmShown !== null ? `♩ = ${bpmShown}` : "♩"}
+          </span>
+          <input type="range" min={25} max={200} step={5} value={speed} onChange={(e) => setSpeed(Number(e.target.value))} className="w-20 h-1 accent-blue-500" aria-label="Snelheid" />
+          <span className="text-xs text-slate-500 w-9 text-right tabular-nums">{speed}%</span>
+        </div>
+        <button onClick={() => setMetronome((v) => !v)} className={`${btn} ${metronome ? btnOn : btnOff}`} title="Metronoom">
+          Metronoom
+        </button>
+        <button onClick={() => setCountIn((v) => !v)} className={`${btn} ${countIn ? btnOn : btnOff}`} title="Eén maat aftellen voor het begin">
+          Aftellen
+        </button>
+        {currentMeasure !== null && (
+          <span className="text-xs text-slate-500 tabular-nums">Maat {currentMeasure}</span>
         )}
-      </button>
-      <button onClick={resetPlayback} disabled={loading} className="px-2.5 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 text-sm disabled:opacity-50 transition-colors">
-        Reset
-      </button>
-      <div className="flex items-center gap-1.5 ml-auto">
-        <span className="text-xs text-slate-500 hidden sm:inline">Snelheid:</span>
-        <input type="range" min={25} max={200} step={25} value={speed} onChange={(e) => setSpeed(Number(e.target.value))} className="w-16 h-1 accent-blue-500" />
-        <span className="text-xs text-slate-400 w-8 text-right">{speed}%</span>
+        <div className="flex items-center gap-1.5 ml-auto">
+          <button onClick={() => setShowPiano(!showPiano)} className={`${btn} ${showPiano ? btnOn : btnOff}`}>
+            Piano
+          </button>
+          {isFullscreen ? (
+            <button onClick={exitFullscreen} className="px-2 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-sm transition-colors" title="Sluiten">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path d="M6 18L18 6M6 6l12 12" /></svg>
+            </button>
+          ) : (
+            <button onClick={enterFullscreen} disabled={loading} className={`${btn} ${btnOff} px-2`} title="Volledig scherm">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3" /></svg>
+            </button>
+          )}
+        </div>
       </div>
-      <button onClick={() => setShowPiano(!showPiano)} className={`px-2.5 py-1.5 rounded-lg text-sm transition-colors ${showPiano ? "bg-blue-600/20 text-blue-400 border border-blue-500/30" : "bg-slate-700 hover:bg-slate-600 text-slate-300"}`}>
-        Piano
-      </button>
-      {isFullscreen ? (
-        <button onClick={exitFullscreen} className="px-2 py-1.5 rounded-lg bg-orange-600 hover:bg-orange-500 text-white text-sm transition-colors" title="Sluiten">
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path d="M6 18L18 6M6 6l12 12" /></svg>
+      <div className="flex items-center gap-1.5 flex-wrap text-sm">
+        <span className="text-xs text-slate-500">Handen:</span>
+        <button onClick={() => setRhOn((v) => !v)} className={`${btn} py-1 ${rhOn ? "bg-blue-500/20 text-blue-300 border-blue-500/40" : btnOff + " line-through"}`} title="Rechterhand aan/uit">
+          Rechts
         </button>
-      ) : (
-        <button onClick={enterFullscreen} disabled={loading} className="px-2 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 text-sm disabled:opacity-50 transition-colors" title="Volledig scherm">
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3" /></svg>
+        <button onClick={() => setLhOn((v) => !v)} className={`${btn} py-1 ${lhOn ? "bg-indigo-500/20 text-indigo-300 border-indigo-500/40" : btnOff + " line-through"}`} title="Linkerhand aan/uit">
+          Links
         </button>
-      )}
-      {loading && <span className="text-sm text-slate-400 animate-pulse">Laden...</span>}
+        <span className="w-px h-5 bg-slate-700 mx-1" />
+        <button onClick={() => setLoopOn((v) => !v)} disabled={!timeline} className={`${btn} py-1 ${loopOn ? btnOn : btnOff}`} title="Een stuk herhalen">
+          Herhaal
+        </button>
+        {loopOn && measureNumbers.length > 0 && (
+          <span className="flex items-center gap-1 text-xs text-slate-400">
+            maat
+            <select value={loopFrom} onChange={(e) => setLoopFrom(Number(e.target.value))} className="bg-slate-800 border border-slate-700 rounded px-1 py-0.5 text-slate-200">
+              {measureNumbers.map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+            t/m
+            <select value={loopTo} onChange={(e) => setLoopTo(Number(e.target.value))} className="bg-slate-800 border border-slate-700 rounded px-1 py-0.5 text-slate-200">
+              {measureNumbers.map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </span>
+        )}
+        {loading && <span className="text-sm text-slate-400 animate-pulse ml-2">Laden...</span>}
+      </div>
     </div>
   );
 
@@ -699,16 +670,17 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
         .fs-dialog::backdrop { background: #020617; }
       `}</style>
       <div ref={wrapperRef}>
-        <div ref={playerRef} className={`${isFullscreen ? "bg-slate-950 flex flex-col w-full h-full p-0.5 gap-0.5" : "space-y-2"}`}>
+        <div ref={playerBoxRef} className={`${isFullscreen ? "bg-slate-950 flex flex-col w-full h-full p-0.5 gap-0.5" : "space-y-2"}`}>
           {controlsBar()}
           {showPiano && pianoKeyboard(isFullscreen ? "h-14 sm:h-20" : "h-20")}
           <div
             ref={scrollRef}
+            onClick={handleNoteClick}
             className={`relative overflow-x-auto overflow-y-hidden cursor-pointer ${isFullscreen ? "flex-1 border-0" : "rounded-lg border border-slate-700/50"}`}
             style={{ minHeight: loading ? 200 : "auto" }}
           >
             <div ref={containerRef} />
-            {/* Playline — thin vertical red line that glides over the score at measure-tempo */}
+            {/* Playline — volgt de werkelijke nootposities in het tempo van het stuk */}
             <div
               ref={playlineRef}
               className="absolute top-0 bottom-0 pointer-events-none"
@@ -721,6 +693,11 @@ export default function OsmdRenderer({ musicXml, fromMeasure, toMeasure }: OsmdR
               }}
             />
           </div>
+          {!isFullscreen && (
+            <p className="text-[11px] text-slate-600 px-1">
+              Tik op een noot om hem te horen en daar te beginnen · spatiebalk = afspelen/pauze · scroll tijdens pauze om de rode lijn te verplaatsen
+            </p>
+          )}
         </div>
       </div>
       <dialog ref={dialogRef} className="fs-dialog" />

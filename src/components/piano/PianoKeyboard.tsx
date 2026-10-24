@@ -1,6 +1,8 @@
 "use client";
 
-import { parseNote, isBlackKey } from "@/lib/piano-utils";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { parseNote } from "@/lib/piano-utils";
+import { playNote, unlockAudio } from "@/lib/audio";
 
 export interface HighlightedNote {
   note: string; // e.g. "C4", "Eb3"
@@ -14,6 +16,9 @@ interface PianoKeyboardProps {
   highlightedNotes?: HighlightedNote[];
   showNoteNames?: boolean;
   size?: "sm" | "md" | "lg";
+  /** Toetsen klikbaar maken (speelt de noot af). Standaard aan. */
+  interactive?: boolean;
+  onKeyPress?: (midi: number) => void;
 }
 
 // White key note names in order within one octave
@@ -35,17 +40,51 @@ const SIZES = {
   lg: { whiteW: 44, whiteH: 160, blackW: 28, blackH: 100 },
 };
 
+const PRESSED_COLOR = "#fbbf24"; // amber-400
+
 export default function PianoKeyboard({
   startOctave = 3,
   octaves = 2,
   highlightedNotes = [],
   showNoteNames = false,
   size = "md",
+  interactive = true,
+  onKeyPress,
 }: PianoKeyboardProps) {
   const dims = SIZES[size];
   const totalWhiteKeys = octaves * 7;
   const svgWidth = totalWhiteKeys * dims.whiteW;
   const svgHeight = dims.whiteH;
+
+  const [pressed, setPressed] = useState<Set<number>>(new Set());
+  const timeouts = useRef(new Map<number, ReturnType<typeof setTimeout>>());
+
+  useEffect(() => {
+    const pending = timeouts.current;
+    return () => pending.forEach((t) => clearTimeout(t));
+  }, []);
+
+  const press = useCallback(
+    (midi: number) => {
+      void unlockAudio().then(() => playNote(midi, { duration: 0.9 }));
+      onKeyPress?.(midi);
+      setPressed((prev) => new Set(prev).add(midi));
+      const existing = timeouts.current.get(midi);
+      if (existing) clearTimeout(existing);
+      timeouts.current.set(
+        midi,
+        setTimeout(() => {
+          setPressed((prev) => {
+            const next = new Set(prev);
+            next.delete(midi);
+            return next;
+          });
+          timeouts.current.delete(midi);
+        }, 250)
+      );
+    },
+    [onKeyPress]
+  );
 
   // Build a map of highlighted notes by midi number for fast lookup
   const highlightMap = new Map<number, HighlightedNote>();
@@ -63,6 +102,19 @@ export default function PianoKeyboard({
     return parseNote(`${name}${octave}`).midi;
   }
 
+  const keyProps = (midi: number, name: string) =>
+    interactive
+      ? {
+          onPointerDown: (e: React.PointerEvent) => {
+            e.preventDefault();
+            press(midi);
+          },
+          role: "button",
+          "aria-label": `Speel ${name}`,
+          style: { cursor: "pointer" },
+        }
+      : {};
+
   const whiteKeys: React.ReactElement[] = [];
   const blackKeys: React.ReactElement[] = [];
   const highlights: React.ReactElement[] = [];
@@ -77,6 +129,7 @@ export default function PianoKeyboard({
       const noteName = WHITE_NOTES[i];
       const midi = getMidi(noteName, currentOctave);
       const hl = highlightMap.get(midi);
+      const isPressed = pressed.has(midi);
 
       whiteKeys.push(
         <rect
@@ -85,11 +138,12 @@ export default function PianoKeyboard({
           y={0}
           width={dims.whiteW}
           height={dims.whiteH}
-          fill={hl ? hl.color : "#1e293b"}
+          fill={isPressed ? PRESSED_COLOR : hl ? hl.color : "#1e293b"}
           stroke="#334155"
           strokeWidth={1}
           rx={0}
           className="transition-colors"
+          {...keyProps(midi, `${noteName}${currentOctave}`)}
         />
       );
 
@@ -104,6 +158,7 @@ export default function PianoKeyboard({
             fill="white"
             fontSize={size === "sm" ? 10 : 12}
             fontWeight="bold"
+            pointerEvents="none"
           >
             {hl.label}
           </text>
@@ -117,6 +172,7 @@ export default function PianoKeyboard({
             textAnchor="middle"
             fill="#64748b"
             fontSize={size === "sm" ? 8 : 10}
+            pointerEvents="none"
           >
             {noteName}
             {currentOctave}
@@ -132,6 +188,7 @@ export default function PianoKeyboard({
         (whiteIndex + 1) * dims.whiteW - dims.blackW / 2;
       const midi = getMidi(noteName, currentOctave);
       const hl = highlightMap.get(midi);
+      const isPressed = pressed.has(midi);
 
       blackKeys.push(
         <rect
@@ -140,11 +197,12 @@ export default function PianoKeyboard({
           y={0}
           width={dims.blackW}
           height={dims.blackH}
-          fill={hl ? hl.color : "#020617"}
+          fill={isPressed ? PRESSED_COLOR : hl ? hl.color : "#020617"}
           stroke="#1e293b"
           strokeWidth={1}
           rx={0}
           className="transition-colors"
+          {...keyProps(midi, `${noteName}${currentOctave}`)}
         />
       );
 
@@ -158,6 +216,7 @@ export default function PianoKeyboard({
             fill="white"
             fontSize={size === "sm" ? 9 : 11}
             fontWeight="bold"
+            pointerEvents="none"
           >
             {hl.label}
           </text>
@@ -169,7 +228,7 @@ export default function PianoKeyboard({
   return (
     <svg
       viewBox={`0 0 ${svgWidth} ${svgHeight}`}
-      className="w-full max-w-full"
+      className="w-full max-w-full select-none touch-manipulation"
       style={{ maxHeight: `${svgHeight}px` }}
     >
       {/* White keys first */}

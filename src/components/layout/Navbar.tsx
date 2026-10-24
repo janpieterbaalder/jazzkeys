@@ -54,6 +54,7 @@ export default function Navbar() {
           onClick={() => setMenuOpen(!menuOpen)}
           className="md:hidden p-2 text-slate-400 hover:text-white transition-colors"
           aria-label="Menu"
+          aria-expanded={menuOpen}
         >
           <svg
             width="24"

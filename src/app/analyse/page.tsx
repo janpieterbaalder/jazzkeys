@@ -1,12 +1,14 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import dynamic from "next/dynamic";
 import PdfUploader from "@/components/analyse/PdfUploader";
 import ChordInput from "@/components/analyse/ChordInput";
 import StukjeView from "@/components/analyse/StukjeView";
 import AkkoordResult from "@/components/analyse/AkkoordResult";
-import type { PdfAnalyseResult, AkkoordAnalyseResult } from "@/lib/claude";
+import type { PdfAnalyseResult, AkkoordAnalyseResult } from "@/lib/analyse-schema";
+import { parseTempo, DEFAULT_BPM } from "@/lib/score-timeline";
+import type { RenderFixes } from "@/components/analyse/OsmdRenderer";
 
 const BladmuziekViewer = dynamic(
   () => import("@/components/analyse/BladmuziekViewer"),
@@ -14,6 +16,29 @@ const BladmuziekViewer = dynamic(
 );
 
 type AnalyseMode = "idle" | "loading" | "pdf-result" | "chord-result" | "error";
+
+interface LibraryItem {
+  titel: string;
+  componist: string;
+  url: string;
+  renderFixes?: RenderFixes;
+}
+
+const BIBLIOTHEEK: LibraryItem[] = [
+  { titel: "Midwayer", componist: "Joep Beving", url: "/scores/midwayer-ace.xml", renderFixes: "midwayer" },
+];
+
+interface ActiveScore {
+  titel: string;
+  url?: string;
+  xml?: string;
+  renderFixes?: RenderFixes;
+}
+
+interface Voortgang {
+  fase: "uploaden" | "lezen" | "schrijven";
+  maat: number;
+}
 
 interface SavedAnalyse {
   id: string;
@@ -33,10 +58,15 @@ export default function AnalysePage() {
   const [error, setError] = useState("");
   const [savedAnalyses, setSavedAnalyses] = useState<SavedAnalyse[]>([]);
   const [loadingSaved, setLoadingSaved] = useState(false);
-  const [activeScore, setActiveScore] = useState<{ url?: string; xml?: string; titel: string } | null>(null);
+  const [activeScore, setActiveScore] = useState<ActiveScore | null>(null);
+  const [voortgang, setVoortgang] = useState<Voortgang | null>(null);
+  const [startTijd, setStartTijd] = useState<number | null>(null);
+  const [nu, setNu] = useState(() => Date.now());
+  const abortRef = useRef<AbortController | null>(null);
+  const resultRef = useRef<HTMLDivElement>(null);
+  const scoreRef = useRef<HTMLDivElement>(null);
 
-  // Eerdere analyses ophalen bij laden
-  useEffect(() => {
+  const refreshSaved = useCallback(() => {
     fetch("/api/analyses")
       .then((res) => res.json())
       .then((data) => {
@@ -45,18 +75,46 @@ export default function AnalysePage() {
       .catch(() => {});
   }, []);
 
-  const refreshSaved = () => {
-    fetch("/api/analyses")
-      .then((res) => res.json())
-      .then((data) => {
-        if (Array.isArray(data)) setSavedAnalyses(data);
-      })
-      .catch(() => {});
+  // Eerdere analyses ophalen bij laden
+  useEffect(() => {
+    refreshSaved();
+  }, [refreshSaved]);
+
+  // Verstreken tijd tonen tijdens het analyseren
+  useEffect(() => {
+    if (mode !== "loading") return;
+    const t = setInterval(() => setNu(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [mode]);
+
+  // Na een analyse naar het resultaat scrollen
+  useEffect(() => {
+    if (mode === "pdf-result" || mode === "chord-result") {
+      resultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [mode]);
+
+  const startLoading = () => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setMode("loading");
+    setError("");
+    setStartTijd(Date.now());
+    setNu(Date.now());
+    return controller;
+  };
+
+  const cancelAnalyse = () => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setVoortgang(null);
+    setMode("idle");
   };
 
   const handlePdfUpload = async (file: File) => {
-    setMode("loading");
-    setError("");
+    const controller = startLoading();
+    setVoortgang({ fase: "uploaden", maat: 0 });
 
     try {
       const formData = new FormData();
@@ -65,21 +123,47 @@ export default function AnalysePage() {
       const res = await fetch("/api/analyse-pdf", {
         method: "POST",
         body: formData,
+        signal: controller.signal,
       });
 
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || "Er ging iets mis");
+      // Invoerfouten komen als gewone JSON terug
+      if (!res.ok || !res.body || res.headers.get("content-type")?.includes("application/json")) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `Er ging iets mis (${res.status})`);
       }
 
-      setPdfResult(data);
+      // NDJSON-stream: voortgang, dan resultaat of fout
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let result: PdfAnalyseResult | null = null;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (value) buffer += decoder.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = buffer.indexOf("\n")) >= 0) {
+          const line = buffer.slice(0, nl).trim();
+          buffer = buffer.slice(nl + 1);
+          if (!line) continue;
+          const msg = JSON.parse(line);
+          if (msg.type === "progress") setVoortgang({ fase: msg.fase, maat: msg.maat });
+          else if (msg.type === "error") throw new Error(msg.error || "Er ging iets mis");
+          else if (msg.type === "result") result = msg.data;
+        }
+        if (done) break;
+      }
+      if (!result) throw new Error("De verbinding werd verbroken voordat de analyse klaar was. Probeer het opnieuw.");
+
+      setPdfResult(result);
       setSelectedFragment(0);
       setMode("pdf-result");
       refreshSaved();
     } catch (err) {
+      if (controller.signal.aborted) return;
       setError(err instanceof Error ? err.message : "Onbekende fout");
       setMode("error");
+    } finally {
+      setVoortgang(null);
     }
   };
 
@@ -87,17 +171,23 @@ export default function AnalysePage() {
     // XML goes directly to the OSMD renderer — no API key needed
     const titel = fileName.replace(/\.(xml|musicxml)$/i, "").replace(/[-_]/g, " ");
     setActiveScore({ xml: xmlContent, titel });
+    requestAnimationFrame(() => scoreRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  };
+
+  const openLibraryItem = (stuk: LibraryItem) => {
+    setActiveScore({ url: stuk.url, titel: `${stuk.titel} — ${stuk.componist}`, renderFixes: stuk.renderFixes });
+    requestAnimationFrame(() => scoreRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
   };
 
   const handleChordSubmit = async (chords: string) => {
-    setMode("loading");
-    setError("");
+    const controller = startLoading();
 
     try {
       const res = await fetch("/api/analyse-akkoorden", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ chords }),
+        signal: controller.signal,
       });
 
       const data = await res.json();
@@ -110,6 +200,7 @@ export default function AnalysePage() {
       setMode("chord-result");
       refreshSaved();
     } catch (err) {
+      if (controller.signal.aborted) return;
       setError(err instanceof Error ? err.message : "Onbekende fout");
       setMode("error");
     }
@@ -153,7 +244,7 @@ export default function AnalysePage() {
 
       {/* Active score viewer */}
       {activeScore && (
-        <div className="mb-8 p-5 rounded-xl border border-slate-800 bg-slate-900/50">
+        <div ref={scoreRef} className="mb-8 p-3 sm:p-5 rounded-xl border border-slate-800 bg-slate-900/50 scroll-mt-20">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-xl font-bold text-white">{activeScore.titel}</h2>
             <button
@@ -163,7 +254,12 @@ export default function AnalysePage() {
               Sluiten
             </button>
           </div>
-          <BladmuziekViewer xmlUrl={activeScore.url} xmlContent={activeScore.xml} />
+          <BladmuziekViewer
+            key={activeScore.url ?? activeScore.titel}
+            xmlUrl={activeScore.url}
+            xmlContent={activeScore.xml}
+            renderFixes={activeScore.renderFixes}
+          />
         </div>
       )}
 
@@ -179,12 +275,10 @@ export default function AnalysePage() {
           Muziekbibliotheek
         </h2>
         <div className="grid gap-3">
-          {[
-            { titel: "Midwayer — Joep Beving", url: "/scores/midwayer-ace.xml", componist: "Joep Beving" },
-          ].map((stuk) => (
+          {BIBLIOTHEEK.map((stuk) => (
             <button
               key={stuk.url}
-              onClick={() => setActiveScore({ url: stuk.url, titel: stuk.titel })}
+              onClick={() => openLibraryItem(stuk)}
               className={`w-full text-left p-4 rounded-xl border transition-colors ${
                 activeScore?.url === stuk.url
                   ? "border-blue-500/50 bg-blue-500/10"
@@ -206,11 +300,24 @@ export default function AnalysePage() {
 
       {/* Loading */}
       {isLoading && (
-        <div className="p-8 rounded-xl border border-slate-800 bg-slate-900/50 text-center">
+        <div className="p-8 rounded-xl border border-slate-800 bg-slate-900/50 text-center" role="status" aria-live="polite">
           <div className="inline-block w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mb-3" />
-          <p className="text-slate-400">
-            Bezig met analyseren... Dit kan even duren.
+          <p className="text-slate-300">
+            {!voortgang
+              ? "Claude analyseert de akkoorden…"
+              : voortgang.fase === "uploaden"
+                ? "Bladmuziek uploaden…"
+                : voortgang.fase === "lezen" || voortgang.maat === 0
+                  ? "Claude leest de bladmuziek…"
+                  : `Maat ${voortgang.maat} uitgeschreven…`}
           </p>
+          <p className="text-xs text-slate-500 mt-1 tabular-nums">
+            {startTijd ? `${Math.max(0, Math.round((nu - startTijd) / 1000))} s` : ""}
+            {voortgang ? " · noot-voor-noot lezen duurt bij een volle pagina enkele minuten" : ""}
+          </p>
+          <button onClick={cancelAnalyse} className="mt-4 text-xs text-slate-500 hover:text-slate-300 underline">
+            Annuleren
+          </button>
         </div>
       )}
 
@@ -229,7 +336,7 @@ export default function AnalysePage() {
 
       {/* PDF Result */}
       {mode === "pdf-result" && pdfResult && (
-        <div>
+        <div ref={resultRef} className="scroll-mt-20">
           {/* Stuk info */}
           <div className="p-4 rounded-xl border border-slate-800 bg-slate-900/50 mb-6">
             <h2 className="text-xl font-bold text-white mb-2">
@@ -308,8 +415,10 @@ export default function AnalysePage() {
               </div>
 
               <StukjeView
+                key={selectedFragment}
                 fragment={pdfResult.fragmenten[selectedFragment]}
                 maatsoort={pdfResult.stukInfo.maatsoort}
+                bpm={parseTempo(pdfResult.stukInfo.tempo) ?? DEFAULT_BPM}
               />
 
               {/* Navigation */}
@@ -358,7 +467,7 @@ export default function AnalysePage() {
 
       {/* Chord Result */}
       {mode === "chord-result" && chordResult && (
-        <div>
+        <div ref={resultRef} className="scroll-mt-20">
           <div className="p-5 rounded-xl border border-slate-800 bg-slate-900/50">
             <AkkoordResult result={chordResult} />
           </div>

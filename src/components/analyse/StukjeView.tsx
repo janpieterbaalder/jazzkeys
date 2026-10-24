@@ -1,14 +1,24 @@
 "use client";
 
-import type { Fragment } from "@/lib/claude";
+import { useMemo } from "react";
+import { controleerMaten, type Fragment } from "@/lib/analyse-schema";
 import InteractieveNotenWeergave from "./InteractieveNotenWeergave";
 
 interface StukjeViewProps {
   fragment: Fragment;
   maatsoort?: string;
+  bpm?: number;
 }
 
-export default function StukjeView({ fragment, maatsoort }: StukjeViewProps) {
+const fmt = (kwarten: number) =>
+  `${Number.isInteger(kwarten) ? kwarten : kwarten.toFixed(2).replace(/0$/, "")} ${kwarten === 1 ? "kwartnoot" : "kwartnoten"}`;
+
+export default function StukjeView({ fragment, maatsoort, bpm }: StukjeViewProps) {
+  const waarschuwingen = useMemo(
+    () => (fragment.maatNoten ? controleerMaten(fragment.maatNoten, maatsoort) : []),
+    [fragment.maatNoten, maatsoort]
+  );
+
   return (
     <div className="space-y-4">
       {/* Interactieve notenbalk — als maatNoten beschikbaar is */}
@@ -16,7 +26,28 @@ export default function StukjeView({ fragment, maatsoort }: StukjeViewProps) {
         <InteractieveNotenWeergave
           maatNoten={fragment.maatNoten}
           maatsoort={maatsoort}
+          bpm={bpm}
         />
+      )}
+
+      {/* Controle: vullen de noten de maat? Zo niet, dan heeft de AI waarschijnlijk iets gemist. */}
+      {waarschuwingen.length > 0 && (
+        <div className="p-3 rounded-lg border border-amber-500/30 bg-amber-500/10">
+          <div className="text-xs text-amber-400 font-semibold uppercase tracking-wider mb-1">
+            Controleer met de bladmuziek
+          </div>
+          <ul className="text-xs text-slate-300 space-y-0.5">
+            {waarschuwingen.slice(0, 6).map((w, i) => (
+              <li key={i}>
+                Maat {w.maatNummer}, {w.hand === "rechts" ? "rechterhand" : "linkerhand"}
+                {w.stem === "omlaag" ? " (onderste stem)" : ""}: {fmt(w.gevonden)} gevonden, {fmt(w.verwacht)} verwacht
+              </li>
+            ))}
+          </ul>
+          <p className="text-[11px] text-slate-500 mt-1">
+            De analyse is automatisch gemaakt; hier mist waarschijnlijk een noot of rust, of klopt een duur niet.
+          </p>
+        </div>
       )}
 
       {/* Noten uitleg */}

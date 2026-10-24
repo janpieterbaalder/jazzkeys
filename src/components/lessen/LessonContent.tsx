@@ -2,6 +2,7 @@
 
 import type { Lesson } from "@/types";
 import PianoKeyboard from "@/components/piano/PianoKeyboard";
+import PlayNotesButton from "@/components/piano/PlayNotesButton";
 import CircleOfFifths from "@/components/lessen/CircleOfFifths";
 
 interface LessonContentProps {
@@ -45,8 +46,11 @@ export default function LessonContent({ lesson }: LessonContentProps) {
                   key={j}
                   className="p-4 rounded-lg border border-slate-800 bg-slate-900/50"
                 >
-                  <div className="text-sm font-medium text-white mb-2">
-                    {example.label}
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <div className="text-sm font-medium text-white">
+                      {example.label}
+                    </div>
+                    <PlayNotesButton notes={example.notes.map((n) => n.note)} />
                   </div>
                   <PianoKeyboard
                     startOctave={3}

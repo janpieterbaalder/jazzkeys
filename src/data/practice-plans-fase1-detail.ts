@@ -5,7 +5,6 @@ const R = "#60a5fa"; // root — blue-400
 const T = "#3b82f6"; // terts (3e) — blue-500
 const V = "#6366f1"; // vijfde — indigo-500
 const Z = "#818cf8"; // zevende — indigo-400
-const N = "#8b5cf6"; // negende — violet-500
 
 export const fase1Week1en2: DagSchema[] = [
   // ============ WEEK 1: Majeur 7 akkoorden ============

@@ -1,45 +1,51 @@
 import { NextRequest, NextResponse } from "next/server";
-import { analyseerAkkoorden } from "@/lib/claude";
+import { analyseerAkkoorden, toAnalyseError } from "@/lib/claude";
 import { db } from "@/lib/db";
 import { analyses } from "@/db/schema";
 
+export const maxDuration = 120;
+
+const MAX_LENGTH = 400;
+
 export async function POST(request: NextRequest) {
+  let chords: unknown;
   try {
-    const body = await request.json();
-    const { chords } = body;
+    ({ chords } = await request.json());
+  } catch {
+    return NextResponse.json({ error: "Ongeldig verzoek" }, { status: 400 });
+  }
 
-    if (!chords || typeof chords !== "string" || chords.trim().length === 0) {
-      return NextResponse.json(
-        { error: "Voer akkoorden in" },
-        { status: 400 }
-      );
-    }
+  if (typeof chords !== "string" || chords.trim().length === 0) {
+    return NextResponse.json({ error: "Voer akkoorden in" }, { status: 400 });
+  }
+  const input = chords.trim().replace(/\s+/g, " ");
+  if (input.length > MAX_LENGTH) {
+    return NextResponse.json(
+      { error: `Maximaal ${MAX_LENGTH} tekens — analyseer een kortere progressie` },
+      { status: 400 }
+    );
+  }
 
-    const result = await analyseerAkkoorden(chords.trim());
+  try {
+    const result = await analyseerAkkoorden(input);
 
     // Opslaan in database (als beschikbaar)
     if (db) {
       try {
         const [saved] = await db
           .insert(analyses)
-          .values({
-            titel: chords.trim(),
-            type: "akkoorden",
-            invoer: chords.trim(),
-            resultaat: result,
-          })
+          .values({ titel: input, type: "akkoorden", invoer: input, resultaat: result })
           .returning({ id: analyses.id });
-
         return NextResponse.json({ ...result, id: saved.id });
-      } catch {
+      } catch (error) {
         // Database fout — geef resultaat toch terug
+        console.error("Analyse opslaan mislukt:", error);
       }
     }
     return NextResponse.json(result);
   } catch (error) {
+    const err = toAnalyseError(error);
     console.error("Akkoord analyse fout:", error);
-    const message =
-      error instanceof Error ? error.message : "Onbekende fout";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ error: err.message }, { status: err.status });
   }
 }

@@ -1,13 +1,20 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import OsmdRenderer from "./OsmdRenderer";
+import OsmdRenderer, { type RenderFixes } from "./OsmdRenderer";
 
 interface BladmuziekViewerProps {
   xmlUrl?: string;
   xmlContent?: string;
   titel?: string;
   toMeasure?: number;
+  renderFixes?: RenderFixes;
+}
+
+interface Fetched {
+  url: string;
+  xml?: string;
+  error?: string;
 }
 
 export default function BladmuziekViewer({
@@ -15,39 +22,36 @@ export default function BladmuziekViewer({
   xmlContent,
   titel,
   toMeasure,
+  renderFixes,
 }: BladmuziekViewerProps) {
-  const [musicXml, setMusicXml] = useState<string | null>(xmlContent ?? null);
-  const [loading, setLoading] = useState(!xmlContent);
-  const [error, setError] = useState<string | null>(null);
+  const [fetched, setFetched] = useState<Fetched | null>(null);
 
-  // If xmlContent is provided directly, use it immediately
+  // Alleen ophalen als er geen XML-inhoud is meegegeven
   useEffect(() => {
-    if (xmlContent) {
-      setMusicXml(xmlContent);
-      setLoading(false);
-      setError(null);
-      return;
-    }
-
-    if (!xmlUrl) return;
-
-    setLoading(true);
-    setError(null);
-
+    if (xmlContent || !xmlUrl) return;
+    let cancelled = false;
     fetch(xmlUrl)
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.text();
       })
       .then((xml) => {
-        setMusicXml(xml);
-        setLoading(false);
+        if (!cancelled) setFetched({ url: xmlUrl, xml });
       })
       .catch((err) => {
-        setError(err instanceof Error ? err.message : "Kon bestand niet laden");
-        setLoading(false);
+        if (!cancelled) {
+          setFetched({ url: xmlUrl, error: err instanceof Error ? err.message : "Kon bestand niet laden" });
+        }
       });
+    return () => {
+      cancelled = true;
+    };
   }, [xmlUrl, xmlContent]);
+
+  const current = fetched?.url === xmlUrl ? fetched : null;
+  const musicXml = xmlContent ?? current?.xml ?? null;
+  const error = xmlContent ? null : current?.error ?? null;
+  const loading = !xmlContent && Boolean(xmlUrl) && !current;
 
   if (loading) {
     return (
@@ -74,7 +78,7 @@ export default function BladmuziekViewer({
       {titel && (
         <h2 className="text-xl font-bold text-white">{titel}</h2>
       )}
-      <OsmdRenderer musicXml={musicXml} toMeasure={toMeasure} />
+      <OsmdRenderer musicXml={musicXml} toMeasure={toMeasure} renderFixes={renderFixes} />
     </div>
   );
 }
